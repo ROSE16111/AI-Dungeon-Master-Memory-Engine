@@ -92,3 +92,78 @@ src/app/
 ## js code
 `export default` 默认导出。一个文件里只能有一个默认导出
 `src/app/page.tsx`：只负责把 / 重定向到 /dashboard
+
+## minimum mvp
+前端：Next.js(App Router)+TS+Tailwind(+ shadcn 以后再补，不影响 MVP)
+
+实时转写：浏览器 Web Speech API（Chrome 可直接用；之后可替换成 Deepgram/Whisper 流式）
+
+文件文本抽取：pdf-parse（PDF）、mammoth（docx）、纯文本直读
+
+文本分析（后端 Node）：
+
+中文关键词：nodejieba（自带 TF-IDF 提取）
+
+英文关键词：keyword-extractor
+
+关键句：按「句子命中关键词得分」排序取 TopN
+
+存储：SQLite(+ Prisma)
+
+1. install dependence
+   * 在项目根目录执行
+   * ```
+   npm i prisma @prisma/client pdf-parse mammoth keyword-extractor nodejieba sbd zod
+   npx prisma init --datasource-provider sqlite
+    ```
+
+Warn:
+```
+npm error gyp ERR! cwd D:\document\UQ\4DECO3801\project\AI-Dungeon-Master-Memory-Engine\dungeon-scribe\node_modules\nodejieba
+npm error gyp ERR! node -v v22.18.0
+npm error gyp ERR! node-gyp -v v11.2.0
+npm error gyp ERR! not ok
+npm error [error] build error
+npm error [error] stack Error: Failed to execute 'D:\nodejs\node.exe D:\nodejs\node_modules\npm\node_modules\node-gyp\bin\node-gyp.js configure --fallback-to-build --module=D:\document\UQ\4DECO3801\project\AI-Dungeon-Master-Memory-Engine\dungeon-scribe\node_modules\nodejieba\build\Release\nodejieba.node --module_name=nodejieba --module_path=D:\document\UQ\4DECO3801\project\AI-Dungeon-Master-Memory-Engine\dungeon-scribe\node_modules\nodejieba\build\Release --napi_version=10 --node_abi_napi=napi --napi_build_version=0 --node_napi_label=node-v127' (1)
+npm error     at ChildProcess.<anonymous> (C:\Users\26988\AppData\Local\npm-cache\_npx\32b9dae5b17fba55\node_modules\@mapbox\node-pre-gyp\lib\util\compile.js:89:23)
+npm error     at ChildProcess.emit (node:events:518:28)
+npm error     at maybeClose (node:internal/child_process:1101:16)
+npm error     at ChildProcess._handle.onexit (node:internal/child_process:304:5)
+npm error [error] System Windows_NT 10.0.22631
+npm error [error] command "D:\\nodejs\\node.exe" "C:\\Users\\26988\\AppData\\Local\\npm-cache\\_npx\\32b9dae5b17fba55\\node_modules\\@mapbox\\node-pre-gyp\\bin\\node-pre-gyp" "install" "--fallback-to-build"      
+npm error [error] cwd D:\document\UQ\4DECO3801\project\AI-Dungeon-Master-Memory-Engine\dungeon-scribe\node_modules\nodejieba
+npm error [error] node -v v22.18.0
+npm error [error] node-pre-gyp -v v2.0.0
+npm error [error] not ok
+npm error A complete log of this run can be found in: C:\Users\26988\AppData\Local\npm-cache\_logs\2025-08-26T03_54_28_308Z-debug-0.log
+node:internal/modules/cjs/loader:1368
+  throw err;
+  ^
+
+Error: Cannot find module 'D:\document\UQ\4DECO3801\project\AI-Dungeon-Master-Memory-Engine\dungeon-scribe\node_modules\prisma\build\index.js'
+```
+* method: 先装 nvm-windows，再切到 Node 20
+```
+winget install -e --id CoreyButler.NVMforWindows
+nvm version
+nvm install 20.18.0
+nvm use 20.18.0
+node -v   # 应该是 v20.18.0
+
+power shell 管理员打开：
+cd D:\document\UQ\4DECO3801\project\AI-Dungeon-Master-Memory-Engine
+
+# 优先用 cmd 语法从父目录删
+cmd /c rmdir /s /q dungeon-scribe\node_modules
+
+cd dungeon-scribe
+
+npm i prisma @prisma/client pdf-parse mammoth keyword-extractor @node-rs/jieba sbd zod
+
+npx prisma init --datasource-provider sqlite
+npx prisma generate
+npx prisma migrate dev --name init
+
+npm run dev
+
+```
