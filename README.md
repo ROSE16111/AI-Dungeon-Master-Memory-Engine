@@ -26,8 +26,10 @@ react (Next.js + TypeScript + Tailwind + shadcn/ui)
   git push
   ```
   * get into project and run
-  ```cd dungeon-scribe
-   npm run dev```
+  ```
+  cd dungeon-scribe
+  npm run dev
+  ```
   * browser: http://localhost:3000 ,we can see Next.js welcome page.
   * `Ctrl + C` + `Y` to exit next.js server in terminal
 
@@ -49,3 +51,33 @@ react (Next.js + TypeScript + Tailwind + shadcn/ui)
         </h1>
     ```
     * `npm run dev` to test
+4. install shadcn/ui
+A comprehensive suite of beautiful UI components (buttons, cards, forms, dialogs, sidebars, and more) is built in.
+
+Based on Tailwind CSS, you can quickly customize styles directly using class names.
+
+Components are imported on demand, unlike large UI frameworks that bundle a lot of useless components at once.
+
+Supports Radix UI (provides accessibility support and animations).
+* `npm i class-variance-authority clsx tailwind-merge @radix-ui/react-icons` install
+* `npx shadcn@latest init` initial
+
+5. start framework
+Next.js App Router is "**files as routes**"（文件即路由）.(dashboard) is a group，You can give this group of pages the same layout [sidebar + top bar] (可以给这组页面套同一个布局(侧边栏+顶栏))
+* create files
+```
+src/app/
+└─ (dashboard)/
+   ├─ layout.tsx           ← 这组路由的公共外壳
+   ├─ page.tsx             ← /dashboard
+   ├─ sessions/
+   │  └─ [id]/
+   │     └─ page.tsx       ← /sessions/123
+   └─ graph/
+      └─ page.tsx          ← /graph
+
+```
+
+## js code
+`export default` 默认导出。一个文件里只能有一个默认导出
+`src/app/page.tsx`：只负责把 / 重定向到 /dashboard
