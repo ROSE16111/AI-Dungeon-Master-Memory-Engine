@@ -68,8 +68,10 @@ Next.js App Router is "**files as routes**"（文件即路由）.(dashboard) is 
 ```
 src/app/
 └─ (dashboard)/
+
    ├─ layout.tsx           ← 这组路由的公共外壳
-   ├─ page.tsx             ← /dashboard
+   ├─ dashboard.tsx             ← /dashboard
+      └─ page.tsx
    ├─ sessions/
    │  └─ [id]/
    │     └─ page.tsx       ← /sessions/123
@@ -77,6 +79,15 @@ src/app/
       └─ page.tsx          ← /graph
 
 ```
+
+[id] : dynamic 
+所有在（dashboard）分组里的页面都会使用同一个layout
+
+* components
+-app-shell
+└─sidebar
+└─topbar
+
 
 ## js code
 `export default` 默认导出。一个文件里只能有一个默认导出
