@@ -3,10 +3,20 @@
 
 generator client {
   provider = "prisma-client-js"
-  output   = "../src/generated/prisma"
 }
 
 datasource db {
   provider = "sqlite"
   url      = env("DATABASE_URL")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  title        String
+  language     String   @default("auto")
+  source       String   @default("live") // live | upload
+  text         String
+  keyPhrases   Json
+  keySentences Json
+  createdAt    DateTime @default(now())
 }

@@ -1,4 +1,9 @@
 # AI-Dungeon-Master-Memory-Engine
+## dependency:
+`npm run dev` to test
+http://localhost:3000/dashboard
+nvm + Node 20
+安装 Node（建议 nvm + Node 20）、再执行 npm i、npx prisma generate、npx prisma migrate dev 就能跑
 ## cmd
 `pwd` check current
 `dir` list files in current directory列出当前目录的文件和文件夹
@@ -110,7 +115,8 @@ src/app/
 
 存储：SQLite(+ Prisma)
 
-1. install dependence
+1. install dependence - prisma at node_modules/ 属于项目本地依赖
+我选 @node-rs/jieba（而不是 nodejieba），它有预编译，Windows 下不需要你安装 VS C++
    * 在项目根目录执行
    * ```
    npm i prisma @prisma/client pdf-parse mammoth keyword-extractor nodejieba sbd zod
@@ -167,3 +173,29 @@ npx prisma migrate dev --name init
 npm run dev
 
 ```
+初始化 Prisma（用 SQLite）
+
+### API
+API 路由是新增的服务端文件，路径在 src/app/api/**/route.ts。
+
+只有当页面去 fetch('/api/...') 时才会调用它们；不调用就没影响
+
+API 放在 src/app/api/<name>/route.ts 的文件，会变成一个服务器接口，比如 /api/analyze。
+
+你可以在里面做：读写数据库、解析文件、做 NLP 等
+
+#### 建表
+1. `prisma/schema.prisma` database code
+2. 生成客户端并建表
+  ```
+    npx prisma generate
+    npx prisma migrate dev --name init
+  ```
+
+3. 新建 Prisma 客户端工具
+新建文件：src/lib/prisma.ts
+
+5. 新建后端 API 路由
+(1) 文本分析并保存：POST /api/analyze
+
+新建文件：src/app/api/analyze/route.ts
