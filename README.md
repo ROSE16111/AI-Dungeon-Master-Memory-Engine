@@ -3,7 +3,7 @@
 * `npm run dev` to test on AI-Dungeon-Master-Memory-Engine/dungeon-scribe
 * http://localhost:3000/dashboard
 * nvm + Node 20
-安装 Node（建议 nvm + Node 20）、再执行 npm i、npx prisma generate、npx prisma migrate dev 就能跑
+安装 Node（建议 nvm + Node 20）、建立数据库： npm i、npx prisma generate、npx prisma migrate dev
 * to exist: Ctrl + C
 ## cmd
 `pwd` check current
