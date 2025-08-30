@@ -1,29 +1,36 @@
-import { NextResponse } from 'next/server';
-import pdf from 'pdf-parse';
-import mammoth from 'mammoth';
+// src/app/api/upload/route.ts
+import { NextRequest, NextResponse } from 'next/server';
+export const runtime = 'nodejs';         // 用 Node，避免 Edge 不支持的库
+export const dynamic = 'force-dynamic';  // 关闭缓存
 
-export const runtime = 'nodejs';
+export async function POST(req: NextRequest) {
+  try {
+    const form = await req.formData();
+    const file = form.get('file') as File | null;
+    if (!file) return NextResponse.json({ error: 'no file' }, { status: 400 });
 
-export async function POST(req: Request) {
-  const form = await req.formData();
-  const file = form.get('file') as File | null;
-  if (!file) return NextResponse.json({ error: 'No file' }, { status: 400 });
+    const arrayBuf = await file.arrayBuffer();
+    const buffer = Buffer.from(arrayBuf);
+    const name = (file.name || '').toLowerCase();
 
-  const buf = Buffer.from(await file.arrayBuffer());
-  const name = file.name.toLowerCase();
+    let text = '';
+    if (name.endsWith('.txt')) {
+      text = buffer.toString('utf8');
+    } else if (name.endsWith('.docx')) {
+      const mammoth = await import('mammoth');
+      const { value } = await mammoth.extractRawText({ buffer });
+      text = value || '';
+    } else if (name.endsWith('.pdf')) {
+      const pdfParse = (await import('pdf-parse')).default;
+      const out = await pdfParse(buffer);
+      text = out.text || '';
+    } else {
+      return NextResponse.json({ error: 'unsupported file type' }, { status: 415 });
+    }
 
-  let text = '';
-  if (name.endsWith('.pdf')) {
-    const data = await pdf(buf);
-    text = (data.text || '').trim();
-  } else if (name.endsWith('.docx')) {
-    const res = await mammoth.extractRawText({ buffer: buf });
-    text = (res.value || '').trim();
-  } else if (name.endsWith('.txt')) {
-    text = buf.toString('utf-8');
-  } else {
-    return NextResponse.json({ error: 'Unsupported file type' }, { status: 415 });
+    return NextResponse.json({ text });
+  } catch (e: any) {
+    console.error('UPLOAD_ERROR', e);
+    return NextResponse.json({ error: e?.message ?? 'upload failed' }, { status: 500 });
   }
-
-  return NextResponse.json({ text });
 }

@@ -1,9 +1,10 @@
 # AI-Dungeon-Master-Memory-Engine
 ## dependency:
-`npm run dev` to test
-http://localhost:3000/dashboard
-nvm + Node 20
+* `npm run dev` to test on AI-Dungeon-Master-Memory-Engine/dungeon-scribe
+* http://localhost:3000/dashboard
+* nvm + Node 20
 安装 Node（建议 nvm + Node 20）、再执行 npm i、npx prisma generate、npx prisma migrate dev 就能跑
+* to exist: Ctrl + C
 ## cmd
 `pwd` check current
 `dir` list files in current directory列出当前目录的文件和文件夹
@@ -199,3 +200,12 @@ API 放在 src/app/api/<name>/route.ts 的文件，会变成一个服务器接�
 (1) 文本分析并保存：POST /api/analyze
 
 新建文件：src/app/api/analyze/route.ts
+
+In the future, /api/analyze will be /api/analyze-llm to use llm to extract key information
+
+**dashboard.tsx**: 
+这就是一个 Client Component，用 useState 管状态，然后调用两个接口：/api/upload 和 /api/analyze。关键流程：
+
+* 选择文件 → onFile()：把文件塞进 FormData，POST /api/upload，拿到后端返回的 data.text，然后 setText(data.text)。
+
+* 点按钮 → analyze()：把 text 作为 JSON 发给 POST /api/analyze，后端返回结构化结果（语言、关键句、关键词、sessionId），再渲染在页面上
