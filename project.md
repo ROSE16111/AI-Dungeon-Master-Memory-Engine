@@ -20,7 +20,12 @@ src/app/
 └─ components/
         ├─ layout       ← 外壳
 ```
-
+#
+这里是api的描述，做的时候可以先不管api，纯做前端。api连着后端输出结果给数据库再显示在前端
+```
+npx prisma generate
+npx prisma migrate dev --name init
+```
 ## **dashboard.tsx**: 
 这就是一个 Client Component，用 useState 管状态，然后调用两个接口：/api/upload 和 /api/analyze。关键流程：
 
