@@ -6,6 +6,9 @@
 安装 Node（建议 nvm + Node 20）、建立数据库： npm i、npx prisma generate、npx prisma migrate dev
 * to exist: Ctrl + C
 * framework: React+Tailwind+shadcn/ui
+* components:`npx shadcn@latest add avatar separator button card input label tabs dialog textarea sheet`
+* icon lib: lucide-react
+
 ## cmd
 `pwd` check current
 `dir` list files in current directory列出当前目录的文件和文件夹
@@ -68,8 +71,10 @@ Components are imported on demand, unlike large UI frameworks that bundle a lot 
 Supports Radix UI (provides accessibility support and animations).
 * `npm i class-variance-authority clsx tailwind-merge @radix-ui/react-icons` install
 * `npx shadcn@latest init` initial
-
-5. start framework
+* `npx shadcn@latest add button card input label tabs dialog textarea separator sheet` add common components
+* `npm i lucide-react` icon lib
+  
+1. start framework
 Next.js App Router is "**files as routes**"（文件即路由）.(dashboard) is a group，You can give this group of pages the same layout [sidebar + top bar] (可以给这组页面套同一个布局(侧边栏+顶栏))
 * create files
 ```
@@ -101,7 +106,7 @@ src/app/
 `src/app/page.tsx`：只负责把 / 重定向到 /dashboard
 
 ## minimum mvp
-前端：Next.js(App Router)+TS+Tailwind(+ shadcn 以后再补，不影响 MVP)
+前端：Next.js(App Router)+TS+Tailwind+ shadcn
 
 实时转写：浏览器 Web Speech API（Chrome 可直接用；之后可替换成 Deepgram/Whisper 流式）
 
@@ -210,3 +215,10 @@ In the future, /api/analyze will be /api/analyze-llm to use llm to extract key i
 * 选择文件 → onFile()：把文件塞进 FormData，POST /api/upload，拿到后端返回的 data.text，然后 setText(data.text)。
 
 * 点按钮 → analyze()：把 text 作为 JSON 发给 POST /api/analyze，后端返回结构化结果（语言、关键句、关键词、sessionId），再渲染在页面上
+
+
+### add fonts
+加“艺术字”字体（Next.js 原生方式）
+
+选择 Cinzel
+`src/styles/fonts.ts`
