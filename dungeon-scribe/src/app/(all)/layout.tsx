@@ -23,14 +23,14 @@ export default function AllLayout({ children }: { children: ReactNode }) {
           className="object-cover"
         />
         {/* 暗化遮罩，保证前景可读 */}
-        <div className="absolute inset-0 bg-black/50" />
+        <div className="absolute inset-0 bg-black/10" />
       </div>
 
       {/* 顶栏 */}
       <TopBar />
 
-      {/* 主体内容：留出 14 的高度空间给 fixed 顶栏；容器居中 */}
-      <main className="pt-16 mx-auto max-w-6xl px-4 pb-10">
+      {/* 主体内容：留出高度空间给 fixed 顶栏；容器居中 */}
+      <main className="pt-20 mx-auto max-w-6xl px-4 pb-10">
         {children}
       </main>
     </div>

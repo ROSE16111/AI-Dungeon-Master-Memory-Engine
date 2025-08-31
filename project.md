@@ -42,6 +42,15 @@ src/app/
 └─ components/
         ├─ layout       ← 外壳
 ```
+## dependency:
+* `npm run dev` to test on AI-Dungeon-Master-Memory-Engine/dungeon-scribe
+* http://localhost:3000/dashboard
+* nvm + Node 20
+安装 Node（建议 nvm + Node 20）、建立数据库： npm i、npx prisma generate、npx prisma migrate dev
+* to exist: Ctrl + C
+* framework: React+Tailwind+shadcn/ui
+* components:`npx shadcn@latest add avatar separator button card input label tabs dialog textarea sheet`
+* icon lib: lucide-react
 #
 这里是api的描述，做的时候可以先不管api，纯做前端。api连着后端输出结果给数据库再显示在前端
 ```

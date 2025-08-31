@@ -29,7 +29,7 @@ export function TopBar() {
         //一个 固定在顶部 的 <header>（fixed + inset-x-0 top-0），z-index 40 
         //透明 + 轻微玻璃（blur）；白字；底部边框作为分隔线；如果你要完全透明，可以去掉 backdrop-blur-sm
         'fixed inset-x-0 top-0 z-40 bg-transparent text-white',
-        'backdrop-blur-[2px]'
+        'backdrop-blur-md bg-black/30'
       )}
     >
 
