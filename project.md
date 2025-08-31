@@ -1,19 +1,41 @@
 ```
 src/app/
-└─ page.tsx                 ← 目前打算这一面做login页面，指向dashboard
+├─ page.tsx                         // log in（/），登录后跳 /dashboard
 
-└─ (dashboard)/
+├─ (all)/                           // AppShell 分组
+│  ├─ layout.tsx                    // general shell
 
-   ├─ layout.tsx           ← 这组路由的公共外壳
-   ├─ dashboard.tsx             ← /dashboard
-      └─ page.tsx
-   ├─ sessions/
-   │  └─ [id]/
-   │     └─ page.tsx       ← /sessions/123
-   └─ graph/
-      └─ page.tsx          ← /graph
+│  ├─ dashboard/
+│  │  └─ page.tsx                   // /dashboard
+|  |  └─ record/                     
+│  |     └─ page.tsx                // /record
 
-└─ api/
+│  ├─ resources/
+│  │  ├─ page.tsx                   // /resources  （页内 Tabs: Maps | Background）
+│  │  ├─ maps/                      // （可选）想做子路由就加
+│  │  │  └─ page.tsx                // /resources/maps
+│  │  └─ background/
+│  │     └─ page.tsx                // /resources/background
+
+│  ├─ history/
+│  │  ├─ page.tsx                   // /history （页内 Tabs: All | Completed）
+│  │  ├─ all/                       // （可选）子路由版
+│  │  │  └─ page.tsx                // /history/all
+│  │  └─ completed/
+│  │     └─ page.tsx                // /history/completed
+
+│  ├─ campaigns/
+│  │  └─ [id]/
+│  │     ├─ summary/
+│  │     │  └─ page.tsx             // /campaigns/123/summary（汇总页）
+│  │     ├─ session/
+│  │     │  └─ page.tsx             // /campaigns/123/session
+│  │     └─ character/
+│  │        └─ page.tsx             // /campaigns/123/character
+|  |
+
+
+├─ api/
     ├─ analyze
     ├─ upload
 

@@ -5,6 +5,7 @@
 * nvm + Node 20
 安装 Node（建议 nvm + Node 20）、建立数据库： npm i、npx prisma generate、npx prisma migrate dev
 * to exist: Ctrl + C
+* framework: React+Tailwind+shadcn/ui
 ## cmd
 `pwd` check current
 `dir` list files in current directory列出当前目录的文件和文件夹
