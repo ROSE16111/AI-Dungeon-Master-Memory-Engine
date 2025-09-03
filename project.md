@@ -86,3 +86,4 @@ npx prisma migrate dev --name init
 * 方案 B（效果更稳）：走 LLM（如 OpenAI），让模型抽取关键句和关键词
 * 用 Prisma 保存一条 session 记录（包含原文、关键词/关键句数组、来源 source）
 * return { sessionId, language, keySentences, keyPhrases }
+

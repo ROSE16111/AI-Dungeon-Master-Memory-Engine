@@ -10,13 +10,69 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model Session {
-  id           String   @id @default(cuid())
-  title        String
-  language     String   @default("auto")
-  source       String   @default("live") // live | upload
-  text         String
-  keyPhrases   Json
-  keySentences Json
-  createdAt    DateTime @default(now())
+model Campaign {
+  id          String   @id @default(uuid())
+  title       String
+  startDate   DateTime @default(now())
+  updateDate  DateTime @updatedAt
+
+  roles       Role[]
+  allTxts     AllTxt[]
+  summaries   Summary[]
 }
+
+model Role {
+  id          String   @id @default(uuid())
+  name        String
+  level       Int
+  campaignId  String
+  campaign    Campaign @relation(fields: [campaignId], references: [id])
+}
+
+model AllTxt {
+  id          String   @id @default(uuid())
+  content     String
+  campaignId  String
+  campaign    Campaign @relation(fields: [campaignId], references: [id])
+  createdAt   DateTime @default(now())
+}
+
+model Summary {
+  id          String   @id @default(uuid())
+  type        SummaryType
+  content     String
+  createdAt   DateTime @default(now())
+
+  // 仅在 type = 'character' 时存在
+  roleName    String?
+
+  campaignId  String
+  campaign    Campaign @relation(fields: [campaignId], references: [id])
+}
+
+enum SummaryType {
+  session
+  character
+}
+
+
+
+
+
+
+
+
+
+
+
+
+//model Session {
+//  id           String   @id @default(cuid())
+//  title        String
+//  language     String   @default("auto")
+//  source       String   @default("live") // live | upload
+//  text         String
+//  keyPhrases   Json
+//  keySentences Json
+//  createdAt    DateTime @default(now())
+//}

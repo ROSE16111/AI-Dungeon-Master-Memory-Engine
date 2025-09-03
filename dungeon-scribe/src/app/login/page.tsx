@@ -1,6 +1,7 @@
 // src/app/(auth)/login/page.tsx
 "use client";
 
+
 import Image from "next/image";
 import { useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
@@ -16,11 +17,14 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
+import { useEffect } from "react"; //SQL API
+
 export default function LoginPage() {
   const router = useRouter();
 
-  const campaigns = ["Moon Castle", "Shadow Valley", "Dragon’s Lair"];
-  const roles = ["Wizard", "Ranger", "Paladin", "Bard"];
+  const [campaigns, setCampaigns] = useState<string[]>([]); //SQL
+  const [roles, setRoles] = useState<string[]>([]); //SQL
+
 
   const [campaign, setCampaign] = useState<string>();
   const [role, setRole] = useState<string>();
@@ -28,11 +32,36 @@ export default function LoginPage() {
 
   const canSubmit = !!(campaign && role);
 
+
+//SQL
+useEffect(() => {
+  async function fetchData() {
+    const res = await fetch("/api/data");
+    const data = await res.json();
+
+    // 提取所有 campaign titles
+    const campaignTitles = data.campaigns.map((c: any) => c.title);
+
+    // 先根据第一个 campaign 加载它的角色
+    const firstRoles =
+      data.campaigns[0]?.roles.map((r: any) => r.name) || [];
+
+    setCampaigns(campaignTitles);
+    setRoles(firstRoles);
+  }
+
+  fetchData();
+}, []);
+
+
+
+
   function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!canSubmit) return;
     router.push("/dashboard");
   }
+
 
   return (
     <div className="h-screen w-screen grid grid-cols-1 md:grid-cols-2">
