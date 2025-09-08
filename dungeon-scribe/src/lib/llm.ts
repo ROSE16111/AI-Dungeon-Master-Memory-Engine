@@ -4,12 +4,20 @@ const client = new Ollama({ host: process.env.OLLAMA_HOST });
 const model  = process.env.OLLAMA_MODEL ?? "phi3:medium";
 
 const LONG_THRESHOLD_WORDS = 1000;
-const CHUNK_WORDS          = 700;
+const CHUNK_TEXT           = 700;
 const CHUNK_OVERLAP        = 70;
-const TEMP                 = 0.2;
+const TEMP                 = 0.1;
 const MERGE_BATCH          = 6;
 
-function splitIntoChunks(text: string, size = CHUNK_WORDS, overlap = CHUNK_OVERLAP): string[] {
+/**
+ * Splits a long transcript into overlapping chunks of text.
+ *
+ * @param text - Full transcript text to split.
+ * @param size - Number of words per chunk (default: `CHUNK_WORDS`).
+ * @param overlap - Number of overlapping words between chunks (default: `CHUNK_OVERLAP`).
+ * @returns Array of chunk strings, each containing up to `size` words.
+ */
+function splitIntoChunks(text: string, size = CHUNK_TEXT, overlap = CHUNK_OVERLAP): string[] {
     const words = text.trim().split(/\s+/);
     const chunks: string[] = [];
     for (let i = 0; i < words.length; i += (size - overlap)) {
@@ -21,6 +29,14 @@ function splitIntoChunks(text: string, size = CHUNK_WORDS, overlap = CHUNK_OVERL
     return chunks;
 }
 
+/**
+ * Calls the Ollama LLM with the given prompt and logs the duration.
+ *
+ * @param prompt - The prompt text to send to the model.
+ * @param label - A label used for console timing and error logging.
+ * @returns LLM response.
+ * @throws Rethrows errors from Ollama client after logging.
+ */
 async function callLLM(prompt: string, label: string): Promise<string> {
     console.time(label);
     try {
@@ -35,10 +51,18 @@ async function callLLM(prompt: string, label: string): Promise<string> {
     }
 }
 
+/**
+ * Summarizes a single transcript chunk into factual bullet point summary.
+ *
+ * @param chunk - The transcript slice text.
+ * @param idx - Index of this chunk (zero-based).
+ * @param total - Total number of chunks.
+ * @returns LLM-produced summary of the chunk.
+ */
 async function summarizeChunk(chunk: string, idx: number, total: number): Promise<string> {
     const prompt = 
     
-        `You are a faithful note-taker for a Dungeons & Dragons session.
+        `You are a precise note taker for a Dungeons & Dragons session.
 
         CHUNK ${idx + 1} OF ${total} — MODE: VERBATIM-ONLY RECAP
         Rules:
@@ -58,6 +82,13 @@ async function summarizeChunk(chunk: string, idx: number, total: number): Promis
     return callLLM(prompt, `LLM_chunk_${idx+1}/${total}`);
 }
 
+/**
+ * Merges summaries in hierarchical batches to avoid issues with context window
+ * and timeout.
+ *
+ * @param summaries - Array of partial summaries from individual chunks.
+ * @returns A single merged summary string.
+ */
 async function hierarchicalMerge(summaries: string[]): Promise<string> {
     let layer = summaries.slice();
     let round = 1;
@@ -75,6 +106,12 @@ async function hierarchicalMerge(summaries: string[]): Promise<string> {
     return layer[0] ?? "";
 }
 
+/**
+ * Combines a group of chunk summaries into overall summary.
+ *
+ * @param summaries - Array of bullet point summaries to merge.
+ * @returns LLM-produced merged bullet point summary.
+ */
 async function mergeSummaries(summaries: string[]): Promise<string> {
     const prompt = `Combine the given Dungeons & Dragons chunk summaries into ONE faithful recap.
 
@@ -97,6 +134,16 @@ async function mergeSummaries(summaries: string[]): Promise<string> {
     return callLLM(prompt, "LLM_merge");
 }
 
+/**
+ * Summarizes an entire TTRPG session transcript.
+ *
+ * - If short, summarises in a single pass.
+ * - If long, splits into chunks, summarizes each, then merges.
+ * - Includes fallbacks if chunk or merge steps fail.
+ *
+ * @param rawText - Full session transcript text.
+ * @returns Final summary as a bullet point string, trimmed if very long.
+ */
 export async function summarizeDnDSession(rawText: string): Promise<string> {
     const text = rawText?.trim() ?? "";
     if (!text) return "";
@@ -138,9 +185,10 @@ export async function summarizeDnDSession(rawText: string): Promise<string> {
     }
 
     if (miniSummaries.length === 0) {
-        const clipped = text.split(/\s+/).slice(0, CHUNK_WORDS).join(" ");
+        const clipped = text.split(/\s+/).slice(0, CHUNK_TEXT).join(" ");
         const fallbackPrompt = `You are a precise session scribe for a Dungeons & Dragons game.
-        Summarize as ≤10 bullets focusing on main story beats only (plot, NPCs, locations, items, decisions/consequences, next steps). No fluff.
+        Summarize as ≤10 bullets focusing on main story beats only (plot, NPCs, locations, items, decisions/consequences, next steps). 
+        No fluff.
 
         SESSION (CLIPPED):
         ${clipped}`;
