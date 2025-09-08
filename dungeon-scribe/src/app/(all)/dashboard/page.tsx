@@ -25,7 +25,7 @@ function wsURL() {
   return "ws://localhost:5000/audio";
 }
 
-/** ====== 上传弹窗（保留你的样式 & 逻辑） ====== */
+/** ====== 上传弹窗 ====== */
 function UploadModal({ onClose }: { onClose: () => void }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
@@ -268,7 +268,7 @@ function UploadModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-/** ====== 页面：点击 Record -> 开麦+WS -> 写入转写 -> 跳到 /dashboard/record ====== */
+/** ====== Record -> WS -> 写入转写 -> /dashboard/record ====== */
 export default function DashboardPage() {
   const sp = useSearchParams();
   const router = useRouter();

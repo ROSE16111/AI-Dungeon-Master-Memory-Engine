@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useState, FormEvent, useEffect } from "react";
+import { useEffect, useMemo, useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -24,141 +24,159 @@ import {
   DialogClose,
   DialogTrigger,
 } from "@/components/ui/dialog";
-
 import { Input } from "@/components/ui/input";
-
 import { Plus } from "lucide-react";
 
 type CampaignDTO = { title: string; roles: { name: string }[] };
 type DataDTO = { campaigns: CampaignDTO[] };
 
+function CreateModal({
+  open,
+  onOpenChange,
+  title,
+  description,
+  placeholder,
+  onCreate,
+  disabled,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  title: string;
+  description: string;
+  placeholder: string;
+  onCreate: (name: string) => Promise<void> | void;
+  disabled?: boolean;
+}) {
+  const [value, setValue] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  //create button
+  async function handleCreate() {
+    const name = value.trim();
+    setErr(null);
+    if (!name) {
+      setErr("Name cannot be empty");
+      return;
+    }
+    try {
+      setBusy(true);
+      await onCreate(name);
+      setValue("");
+      onOpenChange(false);
+    } catch (e: any) {
+      setErr(e?.message || "Create failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  //return JSX element
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[420px]">
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>{description}</DialogDescription>
+        </DialogHeader>
+        <Input
+          placeholder={placeholder}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          disabled={busy || disabled}
+        />
+        {err && <p className="text-sm text-red-400">{err}</p>}
+        <DialogFooter className="mt-4">
+          <DialogClose asChild>
+            <Button type="button" variant="ghost" disabled={busy}>
+              Cancel
+            </Button>
+          </DialogClose>
+          <Button
+            type="button"
+            onClick={handleCreate}
+            disabled={busy || disabled}
+            className="bg-neutral-200 text-black hover:bg-neutral-100"
+          >
+            {busy ? "Creating…" : "Create"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function LoginPage() {
   const router = useRouter();
-
+  //use state
   const [campaigns, setCampaigns] = useState<string[]>([]);
-  const [roles, setRoles] = useState<string[]>([]);
+  const [rolesByCampaign, setRolesByCampaign] = useState<
+    Record<string, string[]>
+  >({});
 
   const [campaign, setCampaign] = useState<string>();
   const [role, setRole] = useState<string>();
   const [remember, setRemember] = useState(false);
 
-  // === State for Create Role ===
-  const [openCreateRole, setOpenCreateRole] = useState(false);
-  const [newRole, setNewRole] = useState("");
-  const [creatingRole, setCreatingRole] = useState(false);
-  const [createRoleError, setCreateRoleError] = useState<string | null>(null);
-
-  // === State for Create Campaign ===
   const [openCreateCampaign, setOpenCreateCampaign] = useState(false);
-  const [newCampaign, setNewCampaign] = useState("");
-  const [creatingCampaign, setCreatingCampaign] = useState(false);
-  const [createCampaignError, setCreateCampaignError] = useState<string | null>(
-    null
-  );
+  const [openCreateRole, setOpenCreateRole] = useState(false);
 
   const canSubmit = !!(campaign && role);
 
-  // load campaigns and first roles
+  // load data
   useEffect(() => {
     (async () => {
       const res = await fetch("/api/data");
       const data: DataDTO = await res.json();
+      const titles = data.campaigns.map((c) => c.title);
+      const map: Record<string, string[]> = {};
+      data.campaigns.forEach((c) => {
+        map[c.title] = c.roles.map((r) => r.name);
+      });
 
-      const campaignTitles = data.campaigns.map((c) => c.title);
-      const firstRoles = data.campaigns[0]?.roles.map((r) => r.name) || [];
-
-      setCampaigns(campaignTitles);
-      setRoles(firstRoles);
+      setCampaigns(titles);
+      setRolesByCampaign(map);
     })();
   }, []);
 
-  // when campaign changes, load its roles
+  // roles in current campaing
+  const roles = useMemo(() => {
+    return campaign ? rolesByCampaign[campaign] ?? [] : [];
+  }, [campaign, rolesByCampaign]);
+
+  // clear roles when campaign changed
   useEffect(() => {
-    if (!campaign) return;
-    (async () => {
-      try {
-        const res = await fetch(
-          `/api/data?campaign=${encodeURIComponent(campaign)}`
-        );
-        const data: DataDTO | { roles: { name: string }[] } = await res.json();
-
-        const roleArr =
-          "campaigns" in data
-            ? (data as DataDTO).campaigns.find((c) => c.title === campaign)
-                ?.roles ?? []
-            : (data as { roles: { name: string }[] }).roles;
-
-        setRoles(roleArr.map((r) => r.name));
-        setRole(undefined);
-      } catch {}
-    })();
+    setRole(undefined);
   }, [campaign]);
 
-  // === Create new campaign ===
-  async function onCreateCampaign() {
-    setCreateCampaignError(null);
-    const name = newCampaign.trim();
-    if (!name) {
-      setCreateCampaignError("Campaign name cannot be empty");
-      return;
-    }
+  //create a Campaign（dataset needed）
+  async function createCampaignLocal(name: string) {
+    // existence check
     if (campaigns.includes(name)) {
-      setCreateCampaignError("This campaign already exists");
-      return;
+      throw new Error("This campaign already exists");
     }
-    try {
-      setCreatingCampaign(true);
-      const res = await fetch("/api/campaigns", {
-        method: "POST",
-        headers: { "Content-Type": "application/json; charset=utf-8" },
-        body: JSON.stringify({ title: name }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      setCampaigns((prev) => [...prev, name]);
-      setCampaign(name);
-      setNewCampaign("");
-      setOpenCreateCampaign(false);
-    } catch (err: any) {
-      setCreateCampaignError(err?.message || "Failed to create campaign");
-    } finally {
-      setCreatingCampaign(false);
-    }
+    setCampaigns((prev) => [...prev, name]);
+    setRolesByCampaign((prev) => ({ ...prev, [name]: [] }));
+    setCampaign(name);
+
+    // TODO：write into the dataset
   }
 
-  // === Create new role ===
-  async function onCreateRole() {
-    setCreateRoleError(null);
-    if (!campaign) {
-      setCreateRoleError("Please select a campaign first");
-      return;
-    }
-    const name = newRole.trim();
-    if (!name) {
-      setCreateRoleError("Role name cannot be empty");
-      return;
-    }
-    if (roles.includes(name)) {
-      setCreateRoleError("This role already exists");
-      return;
+  //create a Role（dataset needed)
+  async function createRoleLocal(name: string) {
+    if (!campaign) throw new Error("Please select a campaign first");
+    const existing = rolesByCampaign[campaign] ?? [];
+    if (existing.includes(name)) {
+      throw new Error("This role already exists");
     }
 
-    try {
-      setCreatingRole(true);
-      const res = await fetch("/api/roles", {
-        method: "POST",
-        headers: { "Content-Type": "application/json; charset=utf-8" },
-        body: JSON.stringify({ campaignTitle: campaign, roleName: name }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      setRoles((prev) => [...prev, name]);
-      setRole(name);
-      setNewRole("");
-      setOpenCreateRole(false);
-    } catch (err: any) {
-      setCreateRoleError(err?.message || "Failed to create role");
-    } finally {
-      setCreatingRole(false);
-    }
+    setRolesByCampaign((prev) => ({
+      ...prev,
+      [campaign]: [...existing, name],
+    }));
+    setRole(name);
+
+    // TODO：write into the dataset
   }
 
   function onSubmit(e: FormEvent<HTMLFormElement>) {
@@ -191,7 +209,7 @@ export default function LoginPage() {
           </h1>
 
           <div className="mt-10 space-y-6">
-            {/* Campaign select with create */}
+            {/* Campaign */}
             <div className="space-y-2">
               <Label className="text-sm text-neutral-300">
                 Choose your Campaign
@@ -212,7 +230,7 @@ export default function LoginPage() {
                   </Select>
                 </div>
 
-                {/* Create Campaign Button */}
+                {/* Create Campaign */}
                 <Dialog
                   open={openCreateCampaign}
                   onOpenChange={setOpenCreateCampaign}
@@ -227,57 +245,31 @@ export default function LoginPage() {
                       <Plus className="w-5 h-5" />
                     </Button>
                   </DialogTrigger>
-
-                  <DialogContent className="sm:max-w-[420px]">
-                    <DialogHeader>
-                      <DialogTitle>Create New Campaign</DialogTitle>
-                      <DialogDescription>
-                        Add a new campaign to the list.
-                      </DialogDescription>
-                    </DialogHeader>
-                    <Input
-                      placeholder="Enter campaign name"
-                      value={newCampaign}
-                      onChange={(e) => setNewCampaign(e.target.value)}
-                      disabled={creatingCampaign}
-                    />
-                    {createCampaignError && (
-                      <p className="text-sm text-red-400">
-                        {createCampaignError}
-                      </p>
-                    )}
-                    <DialogFooter className="mt-4">
-                      <DialogClose asChild>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          disabled={creatingCampaign}
-                        >
-                          Cancel
-                        </Button>
-                      </DialogClose>
-                      <Button
-                        type="button"
-                        onClick={onCreateCampaign}
-                        disabled={creatingCampaign}
-                        className="bg-neutral-200 text-black hover:bg-neutral-100"
-                      >
-                        {creatingCampaign ? "Creating…" : "Create"}
-                      </Button>
-                    </DialogFooter>
-                  </DialogContent>
                 </Dialog>
+
+                <CreateModal
+                  open={openCreateCampaign}
+                  onOpenChange={setOpenCreateCampaign}
+                  title="Create New Campaign"
+                  description="Add a new campaign to the list."
+                  placeholder="Enter campaign name"
+                  onCreate={createCampaignLocal}
+                />
               </div>
             </div>
 
-            {/* Role select with create */}
+            {/* Role */}
             <div className="space-y-2">
               <Label className="text-sm text-neutral-300">
                 Choose your Role
               </Label>
               <div className="flex items-center gap-2">
                 <div className="flex-1">
-                  <Select value={role} onValueChange={setRole}>
+                  <Select
+                    value={role}
+                    onValueChange={setRole}
+                    disabled={!campaign}
+                  >
                     <SelectTrigger className="bg-white/95 text-black">
                       <SelectValue placeholder="Enter your role name" />
                     </SelectTrigger>
@@ -290,6 +282,8 @@ export default function LoginPage() {
                     </SelectContent>
                   </Select>
                 </div>
+
+                {/* Create Role */}
                 <Dialog open={openCreateRole} onOpenChange={setOpenCreateRole}>
                   <DialogTrigger asChild>
                     <Button
@@ -297,48 +291,22 @@ export default function LoginPage() {
                       variant="secondary"
                       className="rounded-full px-3 h-10"
                       title="Create new role"
+                      disabled={!campaign}
                     >
                       <Plus className="w-5 h-5" />
                     </Button>
                   </DialogTrigger>
-
-                  <DialogContent className="sm:max-w-[420px]">
-                    <DialogHeader>
-                      <DialogTitle>Create New Role</DialogTitle>
-                      <DialogDescription>
-                        Add a new role under the selected campaign.
-                      </DialogDescription>
-                    </DialogHeader>
-                    <Input
-                      placeholder="Enter role name"
-                      value={newRole}
-                      onChange={(e) => setNewRole(e.target.value)}
-                      disabled={creatingRole}
-                    />
-                    {createRoleError && (
-                      <p className="text-sm text-red-400">{createRoleError}</p>
-                    )}
-                    <DialogFooter className="mt-4">
-                      <DialogClose asChild>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          disabled={creatingRole}
-                        >
-                          Cancel
-                        </Button>
-                      </DialogClose>
-                      <Button
-                        type="button"
-                        onClick={onCreateRole}
-                        disabled={creatingRole}
-                        className="bg-neutral-200 text-black hover:bg-neutral-100"
-                      >
-                        {creatingRole ? "Creating…" : "Create"}
-                      </Button>
-                    </DialogFooter>
-                  </DialogContent>
                 </Dialog>
+
+                <CreateModal
+                  open={openCreateRole}
+                  onOpenChange={setOpenCreateRole}
+                  title="Create New Role"
+                  description="Add a new role under the selected campaign."
+                  placeholder="Enter role name"
+                  onCreate={createRoleLocal}
+                  disabled={!campaign}
+                />
               </div>
             </div>
 
@@ -350,7 +318,6 @@ export default function LoginPage() {
                 onCheckedChange={(v) => setRemember(Boolean(v))}
                 className="border-white data-[state=checked]:bg-white data-[state=checked]:text-black"
               />
-
               <Label htmlFor="remember" className="text-neutral-300">
                 Remember me
               </Label>
