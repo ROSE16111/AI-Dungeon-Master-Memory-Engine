@@ -1,0 +1,160 @@
+import { Ollama } from "ollama";
+
+const client = new Ollama({ host: process.env.OLLAMA_HOST });
+const model  = process.env.OLLAMA_MODEL ?? "phi3:medium";
+
+const LONG_THRESHOLD_WORDS = 1000;
+const CHUNK_WORDS          = 700;
+const CHUNK_OVERLAP        = 70;
+const TEMP                 = 0.2;
+const MERGE_BATCH          = 6;
+
+function splitIntoChunks(text: string, size = CHUNK_WORDS, overlap = CHUNK_OVERLAP): string[] {
+    const words = text.trim().split(/\s+/);
+    const chunks: string[] = [];
+    for (let i = 0; i < words.length; i += (size - overlap)) {
+        const slice = words.slice(i, i + size);
+        if (!slice.length) break;
+        chunks.push(slice.join(" "));
+        if (i + size >= words.length) break;
+    }
+    return chunks;
+}
+
+async function callLLM(prompt: string, label: string): Promise<string> {
+    console.time(label);
+    try {
+        const res = await client.generate({ model, prompt, options: { temperature: TEMP } });
+        const out = (res.response ?? "").trim();
+        console.timeEnd(label);
+        return out;
+    } catch (err: any) {
+        console.timeEnd(label);
+        console.error(`${label}_ERROR`, { msg: err?.message, code: err?.code, name: err?.name });
+        throw err;
+    }
+}
+
+async function summarizeChunk(chunk: string, idx: number, total: number): Promise<string> {
+    const prompt = 
+    
+        `You are a faithful note-taker for a Dungeons & Dragons session.
+
+        CHUNK ${idx + 1} OF ${total} — MODE: VERBATIM-ONLY RECAP
+        Rules:
+        - Use ONLY facts that appear in THIS CHUNK.
+        - Do NOT infer or invent quests, items, mechanics, or characters not present here.
+        - Keep proper nouns exactly as written in the chunk.
+        - If a detail is uncertain in THIS CHUNK, omit it (do not guess).
+
+        Output format:
+        - 3-8 bullets, each starting with "• ".
+        - Short, factual bullets only.
+        - Focus on the following (if stated): plot beats, explicit NPC names/roles, locations actually visited, items gained/lost, important player decisions and their consequences, hooks/next steps that were said.
+
+        CHUNK TEXT:
+        ${chunk}`;
+
+    return callLLM(prompt, `LLM_chunk_${idx+1}/${total}`);
+}
+
+async function hierarchicalMerge(summaries: string[]): Promise<string> {
+    let layer = summaries.slice();
+    let round = 1;
+
+    while (layer.length > 1) {
+        const next: string[] = [];
+        for (let i = 0; i < layer.length; i += MERGE_BATCH) {
+        const group = layer.slice(i, i + MERGE_BATCH);
+        const merged = await mergeSummaries(group);
+        next.push(merged.trim());
+        }
+        layer = next;
+        round++;
+    }
+    return layer[0] ?? "";
+}
+
+async function mergeSummaries(summaries: string[]): Promise<string> {
+    const prompt = `Combine the given Dungeons & Dragons chunk summaries into ONE faithful recap.
+
+        MODE: VERBATIM-ONLY MERGE
+        - Use ONLY facts that appear in the chunk summaries below.
+        - Do NOT introduce any new names, places, items, rules, or conclusions.
+        - De-duplicate and keep chronological flow.
+        - If two bullets contradict, prefer whichever is clearer and keep it neutral (omit speculation).
+
+        OUTPUT:
+        - ≤10 bullets total, each starting with "• ".
+        - No headings, no numbering, no meta-notes—bullets only.
+        - Focus on the following (if stated): plot beats, explicit NPC names/roles, locations actually visited, items gained/lost, important player decisions and their consequences, hooks/next steps that were said.
+
+        CHUNK SUMMARIES:
+        ${summaries.map((s, i) => `--- CHUNK ${i+1} ---\n${s}`).join("\n")}
+
+        FINAL SUMMARY (bullets only):
+        `;
+    return callLLM(prompt, "LLM_merge");
+}
+
+export async function summarizeDnDSession(rawText: string): Promise<string> {
+    const text = rawText?.trim() ?? "";
+    if (!text) return "";
+
+    const wordCount = text.split(/\s+/).length;
+
+    if (wordCount <= LONG_THRESHOLD_WORDS) {
+        const prompt = 
+        
+        `You are a faithful note-taker for a Dungeons & Dragons session.
+
+        MODE: VERBATIM-ONLY RECAP
+        - Use ONLY facts explicitly present in the transcript.
+        - Never invent names, items, quests, places, mechanics, or outcomes.
+        - If something is unclear or missing, omit it.
+
+        OUTPUT:
+        - 5-10 bullets, each starting with "• ".
+        - Keep bullets short and factual.
+        - Focus on the following (if stated): plot beats, explicit NPC names/roles, locations actually visited, items gained/lost, important player decisions and their consequences, hooks/next steps that were said.
+        - No meta-comments, no headings, no numbering, no analysis, no advice, no rules talk.
+
+        TRANSCRIPT:
+        ${text}`;
+
+        const out = await callLLM(prompt, "LLM_single");
+        return out;
+    }
+
+    const chunks = splitIntoChunks(text);
+    const miniSummaries: string[] = [];
+
+    for (let i = 0; i < chunks.length; i++) {
+        try {
+        const s = await summarizeChunk(chunks[i], i, chunks.length);
+        if (s) miniSummaries.push(s);
+        } catch {
+        }
+    }
+
+    if (miniSummaries.length === 0) {
+        const clipped = text.split(/\s+/).slice(0, CHUNK_WORDS).join(" ");
+        const fallbackPrompt = `You are a precise session scribe for a Dungeons & Dragons game.
+        Summarize as ≤10 bullets focusing on main story beats only (plot, NPCs, locations, items, decisions/consequences, next steps). No fluff.
+
+        SESSION (CLIPPED):
+        ${clipped}`;
+        const out = await callLLM(fallbackPrompt, "LLM_fallback_single");
+        return out;
+    }
+
+    try {
+        const merged = await hierarchicalMerge(miniSummaries);
+        if (merged) return merged.trim();
+    } catch {
+    }
+
+    const joined = miniSummaries.join("\n");
+    return joined.length > 4000 ? joined.slice(0, 4000) + "\n…"
+                                : joined;
+}
