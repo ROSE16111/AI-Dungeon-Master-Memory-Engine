@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useMemo, useState, FormEvent } from "react";
+import { useEffect, useMemo, useState, FormEvent } from "react"; 
 import { useRouter } from "next/navigation";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -123,7 +123,7 @@ export default function LoginPage() {
 
   const canSubmit = !!(campaign && role);
 
-  // load data
+  // useEffect：首次加载时调用 GET /api/data，从数据库中拉取所有 Campaign 和 Role
   useEffect(() => {
     (async () => {
       const res = await fetch("/api/data");
@@ -149,36 +149,52 @@ export default function LoginPage() {
     setRole(undefined);
   }, [campaign]);
 
-  //create a Campaign（dataset needed）
+  //create a Campaign 调用 POST /api/data
   async function createCampaignLocal(name: string) {
-    // existence check
-    if (campaigns.includes(name)) {
-      throw new Error("This campaign already exists");
-    }
-    setCampaigns((prev) => [...prev, name]);
-    setRolesByCampaign((prev) => ({ ...prev, [name]: [] }));
-    setCampaign(name);
+  const res = await fetch("/api/data", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      type: "campaign",
+      title: name,
+    }),
+  });
 
-    // TODO：write into the dataset
-  }
+  const data = await res.json();
 
-  //create a Role（dataset needed)
+  if (!res.ok) throw new Error(data.error || "Failed to create campaign");
+
+  // 更新前端状态
+  setCampaigns((prev) => [...prev, name]);
+  setRolesByCampaign((prev) => ({ ...prev, [name]: [] }));
+  setCampaign(name);
+}
+
+  //create a Role用 POST /api/data
   async function createRoleLocal(name: string) {
-    if (!campaign) throw new Error("Please select a campaign first");
-    const existing = rolesByCampaign[campaign] ?? [];
-    if (existing.includes(name)) {
-      throw new Error("This role already exists");
-    }
+  if (!campaign) throw new Error("Please select a campaign first");
 
-    setRolesByCampaign((prev) => ({
-      ...prev,
-      [campaign]: [...existing, name],
-    }));
-    setRole(name);
+  const res = await fetch("/api/data", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      type: "role",
+      campaignTitle: campaign,
+      name,
+    }),
+  });
 
-    // TODO：write into the dataset
-  }
+  const data = await res.json();
 
+  if (!res.ok) throw new Error(data.error || "Failed to create role");
+
+  // 更新前端状态
+  setRolesByCampaign((prev) => ({
+    ...prev,
+    [campaign]: [...(prev[campaign] || []), name],
+  }));
+  setRole(name);
+}
   function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!canSubmit) return;

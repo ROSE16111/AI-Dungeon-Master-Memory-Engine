@@ -1,8 +1,5 @@
 /*
-  Warnings:
-
-  - You are about to drop the `Session` table. If the table is not empty, all the data it contains will be lost.
-
+  https://kroki.io/dbml/svg/eNqFUcFqwzAMvecrdOulNJexQyGDje2wyw5lt1KKlmitqe0EWy4NZf8-2U2zlGXZRUjP0ntPVp5DURTwjh-afEyzLOVQomlQ7SycMwBVQQgS1o1TBl0LB2o3grNiaT2iK_fopPaMjp-RCSoJrAwJGJpY3KJfVxlXS5iSsGiGCpqOpEFZlvxq8fUy-kOKWm_5xJO8ZW2ZLAPTaYxLEEfitnrkEdc-mMQ1-Tdt0zduYzEi-lsC0o-8DZaGta2ZljCzQeuoPtuM-hXxHT2hp_u7xN_PdVh6n8OARdbJL-d_scF014_pje20pCfvVW2jsFjCkskNxlekkeXZ71XT0azoc5lWWQycPvS2F2I5tXSn-qer8_N31ze1-O0C
 */
 -- DropTable
 PRAGMA foreign_keys=off;
@@ -45,3 +42,6 @@ CREATE TABLE "Summary" (
     "campaignId" TEXT NOT NULL,
     CONSTRAINT "Summary_campaignId_fkey" FOREIGN KEY ("campaignId") REFERENCES "Campaign" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
 );
+
+ALTER TABLE "Summary" ADD COLUMN "imageBase64" TEXT;
+
