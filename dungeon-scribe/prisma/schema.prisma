@@ -1,5 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
 
 generator client {
   provider = "prisma-client-js"
@@ -38,17 +36,16 @@ model AllTxt {
 }
 
 model Summary {
-  id          String   @id @default(uuid())
-  type        SummaryType
-  content     String
-  createdAt   DateTime @default(now())
-
-  // 仅在 type = 'character' 时存在
-  roleName    String?
-
-  campaignId  String
-  campaign    Campaign @relation(fields: [campaignId], references: [id])
+  id           String      @id @default(uuid())
+  type         SummaryType
+  content      String
+  createdAt    DateTime    @default(now())
+  roleName     String?
+  campaignId   String
+  imageBase64  String?     
+  campaign     Campaign    @relation(fields: [campaignId], references: [id])
 }
+
 
 enum SummaryType {
   session

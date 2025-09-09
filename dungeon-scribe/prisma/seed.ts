@@ -1,9 +1,30 @@
-// prisma/seed.ts
+// prisma seed 
 import { PrismaClient } from '@prisma/client';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url'; 
 const prisma = new PrismaClient();
 
+//  兼容 ESM 的 __dirname 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// read picture and change to Base64
+function encodeImageToBase64(filePath: string): string {
+  const imageBuffer = fs.readFileSync(filePath);
+  const base64Image = imageBuffer.toString('base64');
+  const ext = path.extname(filePath).slice(1); // 'png', 'jpg'
+  return `data:image/${ext};base64,${base64Image}`;
+}
+
 async function main() {
-  // Campaign 1
+  const sessionImgPath = path.join(__dirname, '../public/summary.png');
+  const characterImgPath = path.join(__dirname, '../public/summary.png');
+
+  const sessionBase64 = encodeImageToBase64(sessionImgPath);
+  const characterBase64 = encodeImageToBase64(characterImgPath);
+
+  // === Campaign 1 ===
   const campaign1 = await prisma.campaign.create({
     data: {
       id: 'cmp1',
@@ -44,6 +65,7 @@ async function main() {
         content: 'The team enters the Shadow Forest and sets camp near the river.',
         campaignId: campaign1.id,
         createdAt: new Date('2025-08-05T10:00:00Z'),
+        imageBase64: sessionBase64,
       },
       {
         id: 's2',
@@ -52,11 +74,12 @@ async function main() {
         roleName: 'Thalion the Ranger',
         campaignId: campaign1.id,
         createdAt: new Date('2025-08-05T11:00:00Z'),
+        imageBase64: characterBase64,
       },
     ],
   });
 
-  // Campaign 2
+  // === Campaign 2 ===
   const campaign2 = await prisma.campaign.create({
     data: {
       id: 'cmp2',
@@ -89,6 +112,7 @@ async function main() {
         content: 'First night in the desert, strange lights in the sky.',
         campaignId: campaign2.id,
         createdAt: new Date('2025-07-18T10:00:00Z'),
+        imageBase64: sessionBase64, // reuse
       },
       {
         id: 's5',
@@ -97,11 +121,12 @@ async function main() {
         roleName: 'Layla the Illusionist',
         campaignId: campaign2.id,
         createdAt: new Date('2025-07-18T11:00:00Z'),
+        imageBase64: characterBase64,
       },
     ],
   });
 
-  // Campaign 3
+  // === Campaign 3 ===
   const campaign3 = await prisma.campaign.create({
     data: {
       id: 'cmp3',
@@ -135,6 +160,7 @@ async function main() {
       content: 'Day 1 of the siege: defenses barely held.',
       campaignId: campaign3.id,
       createdAt: new Date('2025-06-02T12:00:00Z'),
+      imageBase64: sessionBase64,
     },
   });
 
