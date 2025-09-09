@@ -55,12 +55,12 @@ function UploadModal({ onClose }: { onClose: () => void }) {
     const f = files[0];
     const ext = f.name.split(".").pop()?.toLowerCase() || "";
     const mime = (f.type || "").toLowerCase();
-    const allowedExt = new Set(["mp3", "m4a", "mp4", "wav", "aac"]);
+    const allowedExt = new Set(["txt, mp3", "m4a", "mp4", "wav", "aac"]);
     const isAllowedByExt = allowedExt.has(ext);
-    const isAllowedByMime = mime.startsWith("audio/") || mime === "video/mp4";
+    const isAllowedByMime = mime.startsWith("audio/") || mime === "video/mp4" || mime === "text/plain";
 
     if (!(isAllowedByExt || isAllowedByMime)) {
-      alert("Please upload Mp3 / M4A / Mp4 / Wav / Aac (≤50MB).");
+      alert("Please upload txt / Mp3 / M4A / Mp4 / Wav / Aac (≤50MB).");
       return;
     }
     if (f.size > 50 * 1024 * 1024) {
@@ -101,29 +101,54 @@ function UploadModal({ onClose }: { onClose: () => void }) {
       !isDone ||
       submitState === "submitting" ||
       submitState === "submitted"
-    )
-      return;
+    ) return;
+
     setSubmitState("submitting");
+
     try {
+      const ext = file.name.split(".").pop()?.toLowerCase();
+      const isTxt = ext === "txt" || file.type === "text/plain";
+
+      if (isTxt) {
+        const rawText = (await file.text()).trim();
+        const title = file.name.replace(/\.[^.]+$/, "") || "Untitled Campaign";
+
+        const res = await fetch("/api/analyze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title,
+            text: rawText,
+            source: "upload",
+          }),
+        });
+        if (!res.ok) throw new Error(`Analyse failed: ${res.status}`);
+        const data = await res.json(); // expects { summary: string, ... }
+
+        const summary = typeof data?.summary === "string" ? data.summary : "";
+        setTranscript(summary || rawText);
+
+        router.push("/dashboard/record");
+        setSubmitState("submitted");
+        return;
+      }
+
       const fd = new FormData();
       fd.append("file", file);
 
       const res = await fetch(TRANSCRIBE_URL, { method: "POST", body: fd });
       if (!res.ok) throw new Error(`Transcribe failed: ${res.status}`);
-      const data = await res.json(); // 期望 { text: "..." }
+      const data = await res.json(); // expected { text: "..." }
 
-      // ✅ 只把转写结果写入全局，不创建任何录音会话
       const text = typeof data?.text === "string" ? data.text : "";
       setTranscript(text);
 
-      // ✅ 跳转到 /dashboard/record，Record 页会显示 transcript
       router.push("/dashboard/record");
-
       setSubmitState("submitted");
     } catch (e) {
       console.error(e);
       setSubmitState("error");
-      alert("Upload succeeded but transcribe failed. See console.");
+      alert("Upload/analyse/transcribe failed. See console.");
     }
   };
 
@@ -199,7 +224,7 @@ function UploadModal({ onClose }: { onClose: () => void }) {
             <input
               ref={inputRef}
               type="file"
-              accept=".mp3,.m4a,.mp4,.wav,.aac,audio/*,video/mp4"
+              accept=".txt, .mp3,.m4a,.mp4,.wav,.aac,audio/*,video/mp4"
               className="hidden"
               onChange={(e) => handlePick(e.target.files)}
             />
