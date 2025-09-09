@@ -46,12 +46,29 @@ src/app/
 * `npm run dev` to test on AI-Dungeon-Master-Memory-Engine/dungeon-scribe
 * http://localhost:3000/dashboard
 * nvm + Node 20
+* `conda activate D:\document\UQ\4DECO3801\project\DDenv`
 安装 Node（建议 nvm + Node 20）、建立数据库： npm i、npx prisma generate、npx prisma migrate dev
 * to exist: Ctrl + C
 * framework: React+Tailwind+shadcn/ui
 * components:`npx shadcn@latest add avatar separator button card input label tabs dialog textarea sheet` `npm install @radix-ui/react-checkbox`
 * icon lib: lucide-react
-* 
+* 装的是 CPU 版 onnxruntime==1.22.1
+### py env
+```
+conda create --prefix D:\document\UQ\4DECO3801\project\DDenv python=3.10 -y
+conda activate D:\document\UQ\4DECO3801\project\DDenv
+python -m pip install --upgrade pip setuptools wheel
+cd /d D:\document\UQ\4DECO3801\project\AI-Dungeon-Master-Memory-Engine\voice-to-text
+python -m pip install -r requirement.txt
+(Microsoft C++ Build Tools，用 Visual Studio Installer 安装 “使用 C++ 的桌面开发” 工作负载（含 MSVC v143、Windows 10/11 SDK 等）。装完重启终端或电脑，然后再装 webrtcvad)
+（改装成现成的python -m pip install webrtcvad-wheels==2.0.14
+改成（Windows 下用 wheels，其他平台仍用原包））
+python - <<'PY'
+import faster_whisper, webrtcvad, sounddevice, onnxruntime
+print("OK:", faster_whisper.__version__)
+PY
+
+```
 #
 这里是api的描述，做的时候可以先不管api，纯做前端。api连着后端输出结果给数据库再显示在前端
 ```
@@ -124,6 +141,8 @@ git rm --cached dungeon-scribe/prisma/dev.db
 echo "**/prisma/*.db" >> .gitignore
 echo "**/prisma/*.db-journal" >> .gitignore
 
+git check-ignore -v dungeon-scribe/prisma/dev.db
+
 git add .gitignore
 git commit -m "chore(prisma): stop tracking local SQLite dev.db; ignore db files"
 git push
@@ -142,3 +161,5 @@ npx prisma migrate reset   # 会清空并按迁移重建，开发环境用这个
 npx prisma studio
 
 ```
+
+
