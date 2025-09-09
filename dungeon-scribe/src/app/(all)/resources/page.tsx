@@ -158,16 +158,16 @@ type CardItem = {
 
 const MOCK_RESOURCES: CardItem[] = [
   // Background
-  { id: 'bg-1', title: "Baldur's Gate", subtitle: 'View Details', img: '/placeholders/bg-1.jpg', tag: 'Background', category: 'Background' },
-  { id: 'bg-2', title: 'Forest Adventure', subtitle: 'View Details', img: '/placeholders/bg-2.jpg', tag: 'Background', category: 'Background' },
-  { id: 'bg-3', title: 'Ancient Ruins',  subtitle: 'View Details', img: '/placeholders/bg-3.jpg', tag: 'Background', category: 'Background' },
+  { id: 'bg-1', title: "Baldur's Gate", subtitle: 'View Details', img: '/historypp.png', tag: 'Background', category: 'Background' },
+  { id: 'bg-2', title: 'Forest Adventure', subtitle: 'View Details', img: '/historypp.png', tag: 'Background', category: 'Background' },
+  { id: 'bg-3', title: 'Ancient Ruins',  subtitle: 'View Details', img: '/historypp.png', tag: 'Background', category: 'Background' },
 
   // Map
-  { id: 'map-1', title: 'Northern Valley', subtitle: 'Region Map', img: '/placeholders/map-1.jpg', tag: 'Map', category: 'Map' },
+  { id: 'map-1', title: 'Northern Valley', subtitle: 'Region Map', img: '/historypp.png', tag: 'Map', category: 'Map' },
 
   // Others（物品 / NPC 等你都归到 Others）
-  { id: 'item-1', title: 'Moonblade', subtitle: 'Legendary Sword', img: '/placeholders/item-1.jpg', tag: 'Item', category: 'Others' },
-  { id: 'npc-1',  title: 'Eldrin the Wise', subtitle: 'Archmage • LVL 9', img: '/placeholders/npc-1.jpg', tag: 'NPC', category: 'Others' },
+  { id: 'item-1', title: 'Moonblade', subtitle: 'Legendary Sword', img: '/historypp.png', tag: 'Item', category: 'Others' },
+  { id: 'npc-1',  title: 'Eldrin the Wise', subtitle: 'Archmage • LVL 9', img: '/historypp.png', tag: 'NPC', category: 'Others' },
 ];
 
 /* --------------------------------- small pieces -------------------------------- */
@@ -211,6 +211,9 @@ function ResourceCard({ it }: { it: CardItem }) {
       <CardFooter className="px-4 pb-4 pt-2 justify-end gap-2">
         <Button asChild variant="outline" size="sm">
           <Link href={`/resources/${it.id}`}>Open</Link>
+        </Button>
+        <Button asChild variant="outline" size="sm">
+          <Link href={`/resources/${it.id}`}>download</Link>
         </Button>
       </CardFooter>
     </Card>
