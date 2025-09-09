@@ -1,36 +1,258 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# AI-Dungeon-Master-Memory-Engine
 
-## Getting Started
+## dependency:
 
-First, run the development server:
+- `npm run dev` to test on AI-Dungeon-Master-Memory-Engine/dungeon-scribe
+- http://localhost:3000/dashboard
+- nvm + Node 20
+  安装 Node（建议 nvm + Node 20）、建立数据库： npm i、npx prisma generate、npx prisma migrate dev
+- to exist: Ctrl + C
+- framework: React+Tailwind+shadcn/ui
+- components:`npx shadcn@latest add avatar separator button card input label tabs dialog textarea sheet`
+- icon lib: lucide-react
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+## cmd
+
+`pwd` check current
+`dir` list files in current directory 列出当前目录的文件和文件夹
+
+## front end
+
+react (Next.js + TypeScript + Tailwind + shadcn/ui)
+
+1. install Node.js LTS
+
+- website: nodejs.org
+- terminal:`Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`(Relax restrictions in the current PowerShell session (restore to default after restarting PowerShell for greater security))
+- reopen vscode
+- check in terminal
+  ```
+  node -v
+  npm -v
+  ```
+
+2. create project and run
+
+- terminal at project file path: `npx create-next-app@latest dungeon-scribe --typescript --eslint --src-dir=false --import-alias "@/*"`
+- Press Enter all the way. Then enter the directory and start
+- (option) delete the sub-git repository(which was initial by npm), add file to project repository
+
+```
+Remove-Item -Recurse -Force .git
+cd ..
+git add .
+git commit -m "Add dungeon-scribe Next.js project"
+git push
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+- get into project and run
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```
+cd dungeon-scribe
+npm run dev
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- browser: http://localhost:3000 ,we can see Next.js welcome page.
+- `Ctrl + C` + `Y` to exit next.js server in terminal
 
-## Learn More
+3. install tailwind
 
-To learn more about Next.js, take a look at the following resources:
+- install at terminal (at root dir of project);
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+  - (option)`npm install -D tailwindcss postcss autoprefixer` install
+  - `npx @tailwindcss/cli@latest` install newest CLI pakage.
+  - `npm i -D @tailwindcss/postcss` install PostCSS
+  - create config files by hand: (Option)`tailwind.config.js` and `postcss.config.js`
+  - check
+    - globals.css has `@import "tailwindcss";`
+    - src/app/layout.tsx has `import "./globals.css";`
+    - write a test head on src/app/page.tsx
+    ```
+    {/* 新增的测试标题 */}
+        <h1 className="text-3xl font-bold text-blue-600">
+          Hello Dungeon Scribe!
+        </h1>
+    ```
+    - `npm run dev` to test
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+4. install shadcn/ui
+   A comprehensive suite of beautiful UI components (buttons, cards, forms, dialogs, sidebars, and more) is built in.
 
-## Deploy on Vercel
+Based on Tailwind CSS, you can quickly customize styles directly using class names.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Components are imported on demand, unlike large UI frameworks that bundle a lot of useless components at once.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Supports Radix UI (provides accessibility support and animations).
+
+- `npm i class-variance-authority clsx tailwind-merge @radix-ui/react-icons` install
+- `npx shadcn@latest init` initial
+- `npx shadcn@latest add button card input label tabs dialog textarea separator sheet` add common components
+- `npm i lucide-react` icon lib
+
+1. start framework
+   Next.js App Router is "**files as routes**"（文件即路由）.(dashboard) is a group，You can give this group of pages the same layout [sidebar + top bar] (可以给这组页面套同一个布局(侧边栏+顶栏))
+
+- create files
+
+```
+src/app/
+└─ (dashboard)/
+
+   ├─ layout.tsx           ← 这组路由的公共外壳
+   ├─ dashboard.tsx             ← /dashboard
+      └─ page.tsx
+   ├─ sessions/
+   │  └─ [id]/
+   │     └─ page.tsx       ← /sessions/123
+   └─ graph/
+      └─ page.tsx          ← /graph
+
+```
+
+[id] : dynamic
+所有在（dashboard）分组里的页面都会使用同一个 layout
+
+- components
+  -app-shell
+  └─sidebar
+  └─topbar
+
+## js code
+
+`export default` 默认导出。一个文件里只能有一个默认导出
+`src/app/page.tsx`：只负责把 / 重定向到 /dashboard
+
+## minimum mvp
+
+前端：Next.js(App Router)+TS+Tailwind+ shadcn
+
+实时转写：浏览器 Web Speech API（Chrome 可直接用；之后可替换成 Deepgram/Whisper 流式）
+
+文件文本抽取：pdf-parse（PDF）、mammoth（docx）、纯文本直读
+
+文本分析（后端 Node）：
+
+中文关键词：nodejieba（自带 TF-IDF 提取）
+
+英文关键词：keyword-extractor
+
+关键句：按「句子命中关键词得分」排序取 TopN
+
+存储：SQLite(+ Prisma)
+
+1.  install dependence - prisma at node_modules/ 属于项目本地依赖
+    我选 @node-rs/jieba（而不是 nodejieba），它有预编译，Windows 下不需要你安装 VS C++
+    - 在项目根目录执行
+    - ```
+      npm i prisma @prisma/client pdf-parse mammoth keyword-extractor nodejieba sbd zod
+      npx prisma init --datasource-provider sqlite
+      ```
+
+
+        ```
+
+Warn:
+
+```
+npm error gyp ERR! cwd D:\document\UQ\4DECO3801\project\AI-Dungeon-Master-Memory-Engine\dungeon-scribe\node_modules\nodejieba
+npm error gyp ERR! node -v v22.18.0
+npm error gyp ERR! node-gyp -v v11.2.0
+npm error gyp ERR! not ok
+npm error [error] build error
+npm error [error] stack Error: Failed to execute 'D:\nodejs\node.exe D:\nodejs\node_modules\npm\node_modules\node-gyp\bin\node-gyp.js configure --fallback-to-build --module=D:\document\UQ\4DECO3801\project\AI-Dungeon-Master-Memory-Engine\dungeon-scribe\node_modules\nodejieba\build\Release\nodejieba.node --module_name=nodejieba --module_path=D:\document\UQ\4DECO3801\project\AI-Dungeon-Master-Memory-Engine\dungeon-scribe\node_modules\nodejieba\build\Release --napi_version=10 --node_abi_napi=napi --napi_build_version=0 --node_napi_label=node-v127' (1)
+npm error     at ChildProcess.<anonymous> (C:\Users\26988\AppData\Local\npm-cache\_npx\32b9dae5b17fba55\node_modules\@mapbox\node-pre-gyp\lib\util\compile.js:89:23)
+npm error     at ChildProcess.emit (node:events:518:28)
+npm error     at maybeClose (node:internal/child_process:1101:16)
+npm error     at ChildProcess._handle.onexit (node:internal/child_process:304:5)
+npm error [error] System Windows_NT 10.0.22631
+npm error [error] command "D:\\nodejs\\node.exe" "C:\\Users\\26988\\AppData\\Local\\npm-cache\\_npx\\32b9dae5b17fba55\\node_modules\\@mapbox\\node-pre-gyp\\bin\\node-pre-gyp" "install" "--fallback-to-build"
+npm error [error] cwd D:\document\UQ\4DECO3801\project\AI-Dungeon-Master-Memory-Engine\dungeon-scribe\node_modules\nodejieba
+npm error [error] node -v v22.18.0
+npm error [error] node-pre-gyp -v v2.0.0
+npm error [error] not ok
+npm error A complete log of this run can be found in: C:\Users\26988\AppData\Local\npm-cache\_logs\2025-08-26T03_54_28_308Z-debug-0.log
+node:internal/modules/cjs/loader:1368
+  throw err;
+  ^
+
+Error: Cannot find module 'D:\document\UQ\4DECO3801\project\AI-Dungeon-Master-Memory-Engine\dungeon-scribe\node_modules\prisma\build\index.js'
+```
+
+- method: 先装 nvm-windows，再切到 Node 20
+
+```
+winget install -e --id CoreyButler.NVMforWindows
+nvm version
+nvm install 20.18.0
+nvm use 20.18.0
+node -v   # 应该是 v20.18.0
+
+power shell 管理员打开：
+cd D:\document\UQ\4DECO3801\project\AI-Dungeon-Master-Memory-Engine
+
+# 优先用 cmd 语法从父目录删
+cmd /c rmdir /s /q dungeon-scribe\node_modules
+
+cd dungeon-scribe
+
+npm i prisma @prisma/client pdf-parse mammoth keyword-extractor @node-rs/jieba sbd zod
+
+npx prisma init --datasource-provider sqlite
+npx prisma generate
+npx prisma migrate dev --name init
+
+npm run dev
+
+```
+
+初始化 Prisma（用 SQLite）
+
+### API
+
+API 路由是新增的服务端文件，路径在 src/app/api/\*\*/route.ts。
+
+只有当页面去 fetch('/api/...') 时才会调用它们；不调用就没影响
+
+API 放在 src/app/api/<name>/route.ts 的文件，会变成一个服务器接口，比如 /api/analyze。
+
+你可以在里面做：读写数据库、解析文件、做 NLP 等
+
+#### 建表
+
+1. `prisma/schema.prisma` database code
+2. 生成客户端并建表
+
+```
+  npx prisma generate
+  npx prisma migrate dev --name init
+```
+
+3. 新建 Prisma 客户端工具
+   新建文件：src/lib/prisma.ts
+
+4. 新建后端 API 路由
+   (1) 文本分析并保存：POST /api/analyze
+
+新建文件：src/app/api/analyze/route.ts
+
+In the future, /api/analyze will be /api/analyze-llm to use llm to extract key information
+
+**dashboard.tsx**:
+这就是一个 Client Component，用 useState 管状态，然后调用两个接口：/api/upload 和 /api/analyze。关键流程：
+
+- 选择文件 → onFile()：把文件塞进 FormData，POST /api/upload，拿到后端返回的 data.text，然后 setText(data.text)。
+
+- 点按钮 → analyze()：把 text 作为 JSON 发给 POST /api/analyze，后端返回结构化结果（语言、关键句、关键词、sessionId），再渲染在页面上
+
+### add fonts
+
+加“艺术字”字体（Next.js 原生方式）
+
+选择 Cinzel
+`src/styles/fonts.ts`
+
+### Documention
+
+Using TypeDocs.
+
+Run to generate / regenerate: npx typedoc --entryPointStrategy Expand src 
