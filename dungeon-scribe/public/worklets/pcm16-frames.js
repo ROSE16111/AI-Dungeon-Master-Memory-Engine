@@ -1,3 +1,5 @@
+// AudioWorkletProcessor
+
 class PCM16FrameProcessor extends AudioWorkletProcessor {
   constructor(options) {
     super();
@@ -6,7 +8,7 @@ class PCM16FrameProcessor extends AudioWorkletProcessor {
     this._buf = new Float32Array(0);
   }
 
-  /** Append Float32 chunk to internal buffer */
+  // Append Float32 chunk to internal buffer
   _appendFloat32(chunk) {
     if (!chunk || chunk.length === 0) return;
     const merged = new Float32Array(this._buf.length + chunk.length);
@@ -15,7 +17,7 @@ class PCM16FrameProcessor extends AudioWorkletProcessor {
     this._buf = merged;
   }
 
-  /** Emit as many 20ms frames as possible */
+  //Emit as many 20ms frames as possible
   _drainFrames() {
     while (this._buf.length >= this.frameSize) {
       const frameF32 = this._buf.subarray(0, this.frameSize);
@@ -30,17 +32,15 @@ class PCM16FrameProcessor extends AudioWorkletProcessor {
         frameI16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
       }
 
-      // Transfer ArrayBuffer to main thread (zero-copy)
       const ab = frameI16.buffer;
       this.port.postMessage(ab, [ab]);
     }
   }
 
-  process(inputs /*, outputs, params */) {
+  process(inputs) {
     const input = inputs && inputs[0];
     if (!input || input.length === 0) return true;
 
-    // Use first channel (mono)
     const ch0 = input[0];
     this._appendFloat32(ch0);
     this._drainFrames();

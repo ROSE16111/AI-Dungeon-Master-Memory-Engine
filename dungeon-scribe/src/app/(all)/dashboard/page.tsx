@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useTranscript } from "../../context/TranscriptContext";
 
-/** ====== 工具：人类可读的文件大小 ====== */
+// size
 function formatSize(n: number) {
   if (n < 1024) return `${n} B`;
   if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)} KB`;
@@ -12,7 +12,7 @@ function formatSize(n: number) {
   return `${(n / 1024 ** 3).toFixed(1)} GB`;
 }
 
-/** ====== 计算后端 WS 地址（支持环境变量） ====== */
+// URL
 function wsURL() {
   if (typeof process !== "undefined" && process.env.NEXT_PUBLIC_ASR_WS) {
     return process.env.NEXT_PUBLIC_ASR_WS!;
@@ -25,7 +25,7 @@ function wsURL() {
   return "ws://localhost:5000/audio";
 }
 
-/** ====== 上传弹窗 ====== */
+// upload
 function UploadModal({ onClose }: { onClose: () => void }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
@@ -35,8 +35,7 @@ function UploadModal({ onClose }: { onClose: () => void }) {
     "idle" | "submitting" | "submitted" | "error"
   >("idle");
 
-  // 👇 新增：写入全局转写 & 跳转用
-  const { setTranscript } = useTranscript(); // import { useTranscript } from "../../context/TranscriptContext";
+  const { setTranscript } = useTranscript();
   const router = useRouter();
 
   const openPicker = useCallback(() => {
@@ -72,7 +71,7 @@ function UploadModal({ onClose }: { onClose: () => void }) {
     setSubmitState("idle");
   };
 
-  // 仅做“进度条动画”演示（不影响真实上传）
+  //progress bar
   useEffect(() => {
     if (!file) return;
     const t = setInterval(() => {
@@ -90,11 +89,11 @@ function UploadModal({ onClose }: { onClose: () => void }) {
   const isDone = progress >= 100;
   const doneBytes = file ? (Math.min(progress, 100) / 100) * file.size : 0;
 
-  // 👇 新增：转写 URL（你可以直接改到 Python 的 HTTP 地址）
+  //define the transcription API endpoint
   const TRANSCRIBE_URL =
     process.env.NEXT_PUBLIC_TRANSCRIBE_URL || "/api/transcribe";
 
-  // 👇 修改：提交=发文件给后端→写入全局→跳转 record；不影响录音
+  // send the file to back-end
   const handleConfirmSubmit = async () => {
     if (
       !file ||
@@ -110,13 +109,9 @@ function UploadModal({ onClose }: { onClose: () => void }) {
 
       const res = await fetch(TRANSCRIBE_URL, { method: "POST", body: fd });
       if (!res.ok) throw new Error(`Transcribe failed: ${res.status}`);
-      const data = await res.json(); // 期望 { text: "..." }
-
-      // ✅ 只把转写结果写入全局，不创建任何录音会话
+      const data = await res.json();
       const text = typeof data?.text === "string" ? data.text : "";
       setTranscript(text);
-
-      // ✅ 跳转到 /dashboard/record，Record 页会显示 transcript
       router.push("/dashboard/record");
 
       setSubmitState("submitted");
@@ -129,7 +124,6 @@ function UploadModal({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="fixed inset-0 z-[1000]">
-      {/* 遮罩 */}
       <div
         className="absolute inset-0 bg-black/55 backdrop-blur-[1px] z-0"
         onClick={() => {
@@ -137,8 +131,6 @@ function UploadModal({ onClose }: { onClose: () => void }) {
           onClose();
         }}
       />
-
-      {/* 面板 */}
       <div
         className="absolute z-10 rounded-[20px] shadow-2xl"
         style={{
@@ -160,7 +152,7 @@ function UploadModal({ onClose }: { onClose: () => void }) {
           ✕
         </button>
 
-        {/* 拖拽/点击选择框 */}
+        {/* drug file */}
         <div
           className="absolute cursor-pointer"
           style={{
@@ -206,7 +198,7 @@ function UploadModal({ onClose }: { onClose: () => void }) {
           </div>
         </div>
 
-        {/* 文件信息 */}
+        {/* file info */}
         {file && (
           <div
             className="absolute left-[4%] right-[4%] rounded-[40px] bg-[#EEF1F7] px-6 py-5"
@@ -268,7 +260,7 @@ function UploadModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-/** ====== Record -> WS -> 写入转写 -> /dashboard/record ====== */
+//Record - WS - transcript - /dashboard/record
 export default function DashboardPage() {
   const sp = useSearchParams();
   const router = useRouter();
@@ -286,7 +278,7 @@ export default function DashboardPage() {
     setStarting(true);
 
     try {
-      // 1) 申请麦克风
+      // get media
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
@@ -296,7 +288,7 @@ export default function DashboardPage() {
         },
       });
 
-      // 2) 16kHz AudioContext + 加载 Worklet（带版本参数避免缓存）
+      // 2) 16kHz AudioContext +  Worklet
       const ctx = new (window.AudioContext ||
         (window as any).webkitAudioContext)({ sampleRate: 16000 });
 
@@ -312,55 +304,45 @@ export default function DashboardPage() {
         processorOptions: { frameSize: 320 }, // 20ms @ 16kHz
       });
 
-      // 不接到输出，避免回声：只采集不播放
+      // avoid echo
       source.connect(node);
 
-      // 3) WebSocket 连接到后端
+      // use WebSocket
       const url = wsURL();
       const ws = new WebSocket(url);
 
+      // clear old transcripyt
       ws.onopen = () => {
-        // 可选：清空旧转写
         setTranscript("");
       };
 
-      // Worklet 帧 -> WS
+      // Worklet frame -> WS
       node.port.onmessage = (ev) => {
         const ab = ev.data as ArrayBuffer;
         if (ws.readyState === WebSocket.OPEN) ws.send(ab);
       };
 
-      // 后端返回的转写
+      // give the result to back-end
       ws.onmessage = (ev) => {
-        try {
-          const data = JSON.parse(ev.data as string);
+        const data = JSON.parse(ev.data as string);
 
-          // 你的后端若是 { partial: "..."} 或 { final: "..." }
-          if (typeof data.partial === "string" && data.partial.trim() !== "") {
-            // 想要“只看最终结果”，可以暂时注释掉这一行
-            setTranscript(
-              (prev: string) => (prev ? prev + "\n" : "") + data.partial
-            );
-          }
+        if (typeof data.partial === "string" && data.partial.trim() !== "") {
+          setTranscript(
+            (prev: string) => (prev ? prev + "\n" : "") + data.partial
+          );
+        }
 
-          if (typeof data.final === "string" && data.final.trim() !== "") {
-            setTranscript(
-              (prev: string) => (prev ? prev + "\n" : "") + data.final
-            );
-          }
-        } catch {
-          // 非 JSON 忽略
+        if (typeof data.final === "string" && data.final.trim() !== "") {
+          setTranscript(
+            (prev: string) => (prev ? prev + "\n" : "") + data.final
+          );
         }
       };
 
       ws.onerror = () => {
         setTranscript((p: string) => (p ? p + "\n" : "") + "[WS error]");
       };
-      ws.onclose = () => {
-        // 这里不做清理，交给 Record 页处理（或你自己在 Record 页加 Stop 按钮）
-      };
 
-      // 4) 跳转到 /dashboard/record
       (window as any).__asrSession = { ctx, source, node, ws, stream };
       router.push("/dashboard/record");
     } catch (err) {

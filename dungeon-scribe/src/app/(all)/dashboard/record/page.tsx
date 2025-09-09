@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranscript } from "../../../context/TranscriptContext";
 
-/* 全局：锁定 <body> 滚动（避免整页滚），只允许左右两侧容器自己滚动*/
+// lock <body>
 function useLockBodyScroll() {
   useEffect(() => {
     const prev = document.body.style.overflow;
@@ -14,7 +14,7 @@ function useLockBodyScroll() {
   }, []);
 }
 
-/*右上角：搜索框 + “地图”按钮 将来交互的时候连接接口 */
+// search and map
 function SearchMapsBar() {
   const [q, setQ] = useState("");
   const onSubmit = (e: React.FormEvent) => {
@@ -91,7 +91,7 @@ function SearchMapsBar() {
   );
 }
 
-/* 标题栏 + 视图切换（Sessions / Characters） */
+// Sessions / Characters
 function TitleWithFilter({
   value,
   onChange,
@@ -102,7 +102,6 @@ function TitleWithFilter({
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
-  // 点击标题外部时，关闭下拉
   useEffect(() => {
     const onDoc = (e: MouseEvent) => {
       if (!ref.current) return;
@@ -131,7 +130,7 @@ function TitleWithFilter({
         {label}
       </h1>
 
-      {/* 切换按钮（仅改变 value，不影响布局） */}
+      {/* buttons */}
       <button
         aria-label="Toggle"
         onClick={() => setOpen((s) => !s)}
@@ -149,7 +148,7 @@ function TitleWithFilter({
         </svg>
       </button>
 
-      {/* 下拉菜单（仅控制视图切换，不持久化） */}
+      {/* session/character */}
       {open && (
         <div className="absolute top-[72px] z-50 min-w-[160px] rounded-md border border-white/20 bg-black/70 backdrop-blur shadow-lg text-white">
           <MenuItem
@@ -197,7 +196,7 @@ function MenuItem({
   );
 }
 
-/* 右侧：角色轮播（堆叠 + 3D 翻转），items 数据之后可替换（图片路径/文案），翻转只作用于“中心卡”。 */
+// right part
 function CharacterCarouselStacked() {
   const items = [
     {
@@ -220,14 +219,13 @@ function CharacterCarouselStacked() {
     },
   ];
 
-  const [cur, setCur] = useState(0); // 当前中心卡索引
-  const [flippedIndex, setFlippedIndex] = useState<number | null>(null); // 正在翻转显示背面的卡（仅中心卡有效）
+  const [cur, setCur] = useState(0);
+  const [flippedIndex, setFlippedIndex] = useState<number | null>(null);
   const N = items.length;
   if (N === 0) return null;
 
-  const idxL = (cur - 1 + N) % N; // 左侧卡索引
-  const idxR = (cur + 1) % N; // 右侧卡索引
-
+  const idxL = (cur - 1 + N) % N;
+  const idxR = (cur + 1) % N;
   const prev = () => {
     setCur((v) => (v - 1 + N) % N);
     setFlippedIndex(null);
@@ -241,7 +239,7 @@ function CharacterCarouselStacked() {
     setFlippedIndex(null);
   };
 
-  // —— 单张卡片（支持前后两面） —— //
+  // card
   function Card({
     data,
     type,
@@ -251,7 +249,6 @@ function CharacterCarouselStacked() {
     type: "left" | "center" | "right";
     index: number;
   }) {
-    // 卡片三态的几何参数（按设计微调）
     const styleByType: Record<typeof type, React.CSSProperties> = {
       left: {
         left: 0,
@@ -286,14 +283,12 @@ function CharacterCarouselStacked() {
     return (
       <div className="absolute" style={s}>
         <div className="h-full w-full [perspective:1200px] rounded-[20px]">
-          {/* 内层“可旋转”容器：rotateY 控制正反面切换 */}
           <div
             className="relative h-full w-full rounded-[20px] transition-transform duration-500 [transform-style:preserve-3d] shadow-[0_22px_74px_rgba(0,0,0,0.6)]"
             style={{
               transform: isFlipped ? "rotateY(180deg)" : "rotateY(0deg)",
             }}
           >
-            {/* 正面 */}
             <div
               className="absolute inset-0 rounded-[20px] border border-[#E9E9E9] [backface-visibility:hidden] overflow-hidden"
               style={{ background: isCenter ? "#F5F5F5" : "#FFFFFF" }}
@@ -343,7 +338,6 @@ function CharacterCarouselStacked() {
               </div>
             </div>
 
-            {/* 背面（点击任意处返回正面） */}
             <div
               className="absolute inset-0 rounded-[20px] border border-[#E9E9E9] bg-white px-6 py-5 flex flex-col gap-3 [backface-visibility:hidden]"
               style={{ transform: "rotateY(180deg)" }}
@@ -393,7 +387,7 @@ function CharacterCarouselStacked() {
       className="relative"
       style={{ width: 730, height: 438, left: 40, top: -36, zIndex: 30 }}
     >
-      {/* 上一页 */}
+      {/* last page */}
       <button
         onClick={prev}
         aria-label="Previous"
@@ -419,7 +413,7 @@ function CharacterCarouselStacked() {
         </svg>
       </button>
 
-      {/* 下一页 */}
+      {/* next page */}
       <button
         onClick={next}
         aria-label="Next"
@@ -750,13 +744,13 @@ export default function RecordPage() {
 
   const { transcript, setTranscript } = useTranscript();
 
-  // —— 录音状态：根据是否已有全局会话句柄来初始化 —— //
+  // recording state
 
   const [isRecording, setIsRecording] = useState<boolean>(
     () => typeof window !== "undefined" && !!(window as any).__asrSession?.ctx
   );
 
-  // ===== 左侧滚动条（保持你原有的实现） =====
+  //scroll bar
   const viewportRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
   const [thumbTop, setThumbTop] = useState(0);
@@ -844,7 +838,7 @@ export default function RecordPage() {
     recalc();
   }, [transcript]);
 
-  // ===== 工具：后端 WS 地址 =====
+  // ws URL
   function wsURL() {
     if (typeof process !== "undefined" && process.env.NEXT_PUBLIC_ASR_WS) {
       return process.env.NEXT_PUBLIC_ASR_WS!;
@@ -853,17 +847,16 @@ export default function RecordPage() {
     return `${proto}://${window.location.hostname}:5000/audio`;
   }
 
-  // ===== 开始录音 =====
+  // START recording
   const startRecording = async () => {
     if (isRecording) return;
 
-    // 先把可能残留的旧会话彻底停掉
     try {
       stopRecording();
     } catch {}
 
     try {
-      // 1) 申请麦克风
+      // ask for mic
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
@@ -873,7 +866,7 @@ export default function RecordPage() {
         },
       });
 
-      // 2) AudioContext + Worklet
+      // AudioContext + Worklet
       const ctx = new (window.AudioContext ||
         (window as any).webkitAudioContext)({ sampleRate: 16000 });
       if (ctx.state === "suspended") {
@@ -884,21 +877,20 @@ export default function RecordPage() {
         "/worklets/pcm16-frames.js",
         window.location.origin
       );
-      moduleUrl.searchParams.set("v", Date.now().toString()); // 避免缓存
-      await ctx.audioWorklet.addModule(moduleUrl.toString()); // 若抛错，控制台能看到
+      moduleUrl.searchParams.set("v", Date.now().toString());
+      await ctx.audioWorklet.addModule(moduleUrl.toString());
 
       const source = ctx.createMediaStreamSource(stream);
       const node = new AudioWorkletNode(ctx, "pcm16-frames", {
         processorOptions: { frameSize: 320 }, // 20ms @ 16kHz
       });
 
-      // ✅ 关键：把 Worklet 放到“静音下游”，确保不会被优化/挂起
       const sink = ctx.createGain();
       sink.gain.value = 0;
       source.connect(node);
       node.connect(sink).connect(ctx.destination);
 
-      // 3) WebSocket（带缓冲）
+      // WebSocket
       const ws = new WebSocket(
         (function () {
           if (
@@ -918,7 +910,7 @@ export default function RecordPage() {
 
       ws.onopen = () => {
         open = true;
-        // 把排队的帧一次性发出去
+
         while (queue.length) {
           const buf = queue.shift()!;
           try {
@@ -937,7 +929,7 @@ export default function RecordPage() {
           } catch {}
         } else {
           queue.push(ab);
-          if (queue.length > 200) queue.splice(0, queue.length - 200); // 简单限流
+          if (queue.length > 200) queue.splice(0, queue.length - 200);
         }
       };
       node.port.onmessageerror = (e) =>
@@ -964,7 +956,6 @@ export default function RecordPage() {
         setIsRecording(false);
       };
 
-      // 4) 暴露全局句柄，Stop 用
       (window as any).__asrSession = { ctx, source, node, sink, ws, stream };
     } catch (err) {
       console.error(err);
@@ -973,11 +964,10 @@ export default function RecordPage() {
     }
   };
 
-  // ===== 停止录音并清理 =====
+  //stop and clear
   const stopRecording = () => {
     const sess = (window as any).__asrSession || null;
     try {
-      // 先停发消息，断开音频图
       try {
         if (sess?.node?.port) {
           sess.node.port.onmessage = null;
@@ -995,7 +985,6 @@ export default function RecordPage() {
         sess?.sink?.disconnect?.();
       } catch {}
 
-      // 停止媒体轨道
       if (sess?.stream?.getTracks) {
         for (const t of sess.stream.getTracks()) {
           try {
@@ -1004,7 +993,7 @@ export default function RecordPage() {
         }
       }
 
-      // 关闭 WS
+      // close WS
       if (sess?.ws) {
         try {
           sess.ws.onmessage = null;
@@ -1020,7 +1009,7 @@ export default function RecordPage() {
         } catch {}
       }
 
-      // 关闭 AudioContext
+      // close AudioContext
       if (
         sess?.ctx &&
         typeof sess.ctx.close === "function" &&
@@ -1035,7 +1024,7 @@ export default function RecordPage() {
     }
   };
 
-  // ===== 右侧视图切换保持你原样（用你已有的 TitleWithFilter / Sessions / Characters） =====
+  // right panel
   const [view, setView] = useState<"sessions" | "character">("sessions");
 
   return (
@@ -1046,13 +1035,11 @@ export default function RecordPage() {
       >
         <SearchMapsBar />
 
-        {/* ===================== 左侧：标题 + 开始/停止切换 + 转写滚动 ===================== */}
         <aside
           className="absolute"
           style={{ left: 0, top: 60, bottom: 18, width: 363 }}
         >
           <div className="flex items-center justify-center gap-3 mb-6">
-            {/* 图标文案：根据状态切换 */}
             <div
               className={`w-[220px] h-[47px] rounded-[250px] flex items-center justify-center
                           text-white text-[28px] font-medium shadow-[0_4px_25px_#FF3D00]
@@ -1062,7 +1049,7 @@ export default function RecordPage() {
               {isRecording ? "Recording" : "Paused"}
             </div>
 
-            {/* 按钮：Stop / Start */}
+            {/* button：Stop / Start */}
             {isRecording ? (
               <button
                 aria-label="Stop recording"
@@ -1088,7 +1075,7 @@ export default function RecordPage() {
             )}
           </div>
 
-          {/* 转写滚动区（用 transcript 替换原 leftText） */}
+          {/* transcript */}
           <div className="relative" style={{ height: "calc(100% - 48px)" }}>
             <div
               className="absolute left-0 right-0 top-0 bg-[rgba(217,217,217,0.5)]
@@ -1115,7 +1102,7 @@ export default function RecordPage() {
                 </div>
               </div>
 
-              {/* 自定义滚动条（保持你原有实现） */}
+              {/* scroll bar */}
               <div
                 ref={trackRef}
                 onMouseDown={(e) => {
@@ -1160,7 +1147,7 @@ export default function RecordPage() {
           </div>
         </aside>
 
-        {/* ===================== 右侧：你的 Sessions / Characters 保持不变 ===================== */}
+        {/* Sessions / Characters  */}
         <section
           className="absolute"
           style={{

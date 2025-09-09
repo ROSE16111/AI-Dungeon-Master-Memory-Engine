@@ -1,6 +1,6 @@
 // src/app/(all)/resources/page.tsx
-'use client';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+"use client";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 export default function ResourcesPage() {
   return (
