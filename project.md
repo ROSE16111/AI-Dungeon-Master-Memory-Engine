@@ -49,8 +49,9 @@ src/app/
 安装 Node（建议 nvm + Node 20）、建立数据库： npm i、npx prisma generate、npx prisma migrate dev
 * to exist: Ctrl + C
 * framework: React+Tailwind+shadcn/ui
-* components:`npx shadcn@latest add avatar separator button card input label tabs dialog textarea sheet`
+* components:`npx shadcn@latest add avatar separator button card input label tabs dialog textarea sheet` `npm install @radix-ui/react-checkbox`
 * icon lib: lucide-react
+* 
 #
 这里是api的描述，做的时候可以先不管api，纯做前端。api连着后端输出结果给数据库再显示在前端
 ```
@@ -87,3 +88,26 @@ npx prisma migrate dev --name init
 * 用 Prisma 保存一条 session 记录（包含原文、关键词/关键句数组、来源 source）
 * return { sessionId, language, keySentences, keyPhrases }
 
+# debug:
+从 Git 拉下代码后，.env 里的 DATABASE_URL、数据库文件/实例、以及 Prisma 的迁移都需要你自己在本机执行一次，否则 /api/data 里的 Prisma 查询会直接 500，前端再去 res.json() 就抛 Unexpected end of JSON input
+
+* 生成 .env
+    1. if not have, then create .env file and add: `DATABASE_URL="file:./prisma/dev.db"`
+* 生成Prisma Client : 
+    1. `cd dungeon-scribe`
+    2. `npx prisma generate`
+* 建表
+```
+npx prisma migrate dev -n init
+# or
+npx prisma migrate dev -n <name>
+
+# quick test; 只同步 schema 到数据库，不产生迁移文件。
+npx prisma db push
+
+# reset data（清库重建，清空数据）
+npx prisma migrate reset
+```
+
+* 看表read/visualize：`npx prisma studio`
+* 重启： `npm run dev`
