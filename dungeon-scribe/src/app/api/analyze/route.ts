@@ -1,105 +1,103 @@
-import { NextResponse } from 'next/server';
-import { prisma } from '@/lib/prisma';
-import keyword_extractor from 'keyword-extractor';
-import { extract as jiebaExtract } from '@node-rs/jieba';
-import * as sbd from 'sbd'
+import { NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { SummaryType } from "@prisma/client";
+import { summarizeDnDSession } from "@/lib/llm"; // adjust path if different
 
-export const runtime = 'nodejs';
+export const runtime = "nodejs";
 
 type AnalyzeBody = {
-  title?: string;
-  text: string;
-  language?: 'en' | 'zh' | 'auto';
-  source?: 'live' | 'upload';
-  topK?: number;
-  topN?: number;
+  title?: string;      
+  text: string;       
+  source?: "live" | "upload"; 
 };
 
-function isChinese(text: string) {
-  return /[\u4e00-\u9fa5]/.test(text);
-}
+/**
+ * Handle POST requests to summarise a given text transcript.
+ *
+ * @remarks
+ * This endpoint:
+ * 1. Parses the request body to extract transcript text and optional metadata.
+ * 2. Ensures a campaign record exists in the database (creates if missing).
+ * 3. Saves the full transcript text (`allTxt` table).
+ * 4. Generates a session summary via the LLM (`summarizeDnDSession`).
+ * 5. Stores the summary in the database (`summary` table).
+ * 6. Returns JSON with campaign, transcript, and summary IDs, plus summary content.
+ *
+ * @param req - The incoming request object containing JSON body with transcript and metadata.
+ * @returns A JSON response containing campaign/session IDs and the generated summary,
+ * or an error response if something goes wrong.
+ *
+ * @example
+ * ```ts
+ * const response = await fetch("/api/analyze", {
+ *   method: "POST",
+ *   body: JSON.stringify({
+ *     title: "Session 1",
+ *     text: "Long transcript text...",
+ *     source: "upload",
+ *   }),
+ * });
+ * const data = await response.json();
+ * ```
+ */
+export async function POST(req: Request) {
+  try {
+    // Parse request body as AnalyzeBody
+    const body = (await req.json()) as AnalyzeBody;
 
-function splitChineseSentences(text: string): string[] {
-  return text
-    .replace(/\s+/g, ' ')
-    .split(/(?<=[。！？；\?！;])\s*/g)
-    .map(s => s.trim())
-    .filter(Boolean);
-}
+    // Get transcript text and ensure it's not empty
+    const text = (body.text ?? "").trim();
+    if (!text) {
+      return NextResponse.json({ error: "Empty text" }, { status: 400 });
+    }
 
-function topKeywords(text: string, lang: 'zh'|'en', k: number): string[] {
-  if (lang === 'zh') {
-     return jiebaExtract(text, k).map((x: { keyword: string; weight: number }) => x.keyword);
-  } else {
-    const words = keyword_extractor.extract(text, {
-      language: 'english',
-      remove_digits: true,
-      return_changed_case: true,
-      remove_duplicates: false,
+    // Use provided title or fallback to default
+    const campaignTitle = (body.title || "Untitled Campaign").trim();
+
+    // Look up existing campaign by title, or create if not found
+    let campaign = await prisma.campaign.findFirst({ where: { title: campaignTitle } });
+    if (!campaign) {
+      campaign = await prisma.campaign.create({ data: { title: campaignTitle } });
+    }
+
+    // Store the raw transcript in the database
+    const allTxt = await prisma.allTxt.create({
+      data: {
+        content: text,
+        campaignId: campaign.id,
+      },
     });
-    const freq = new Map<string, number>();
-    for (const w of words) freq.set(w, (freq.get(w) || 0) + 1);
-    return [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, k).map(([w]) => w);
+
+    // Generate summary bullets using the LLM
+    const summaryBullets = (await summarizeDnDSession(text)).trim();
+
+    // Fallback summary if LLM produced nothing
+    const content =
+      summaryBullets ||
+      "• Summary unavailable. (LLM produced no output)\n• Check Ollama host/model configuration.";
+
+    // Save summary to database
+    const summary = await prisma.summary.create({
+      data: {
+        type: SummaryType.session,
+        content,  
+        campaignId: campaign.id,
+      },
+    });
+
+    // Return JSON response with references to stored objects
+    return NextResponse.json({
+      campaignId: campaign.id,
+      allTxtId: allTxt.id,
+      summaryId: summary.id,
+      title: campaignTitle,
+      source: body.source || "live",
+      summary: content,
+    });
+  } catch (err: any) {
+    // Log and return generic error on failure
+    console.error("POST /api/analyse error:", err?.message || err);
+    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
   }
 }
 
-function scoreSentences(sentences: string[], keywords: string[], lang: 'zh'|'en') {
-  const set = new Set(keywords);
-  return sentences
-    .map((s) => {
-      let score = 0;
-      if (lang === 'zh') {
-        for (const kw of set) {
-          const m = s.match(new RegExp(kw, 'g'));
-          if (m) score += m.length;
-        }
-      } else {
-        const tokens = s.toLowerCase().match(/[a-z0-9']+/g) || [];
-        for (const t of tokens) if (set.has(t)) score += 1;
-      }
-      score = score / Math.max(1, s.length / 80);
-      return { s, score };
-    })
-    .sort((a, b) => b.score - a.score);
-}
-
-export async function POST(req: Request) {
-  const body = (await req.json()) as AnalyzeBody;
-  const text = (body.text || '').trim();
-  if (!text) return NextResponse.json({ error: 'Empty text' }, { status: 400 });
-
-  const lang: 'zh'|'en' =
-    body.language === 'zh' ? 'zh' :
-    body.language === 'en' ? 'en' :
-    isChinese(text) ? 'zh' : 'en';
-
-  const sentences =
-    lang === 'zh'
-      ? splitChineseSentences(text)
-      : sbd.sentences(text, { newline_boundaries: true });
-
-  const topK = body.topK ?? 12;
-  const topN = body.topN ?? 5;
-
-  const keywords = topKeywords(text, lang, topK);
-  const ranked = scoreSentences(sentences, keywords, lang);
-  const keySentences = ranked.slice(0, topN).map(r => r.s);
-
-  const session = await prisma.session.create({
-    data: {
-      title: body.title || (body.source === 'upload' ? 'Uploaded Doc' : 'Live Session'),
-      language: lang,
-      source: body.source || 'live',
-      text,
-      keyPhrases: keywords,
-      keySentences,
-    },
-  });
-
-  return NextResponse.json({
-    sessionId: session.id,
-    language: lang,
-    keyPhrases: keywords,
-    keySentences,
-  });
-}
