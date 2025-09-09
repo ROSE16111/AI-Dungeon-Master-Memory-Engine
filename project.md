@@ -111,3 +111,34 @@ npx prisma migrate reset
 
 * 看表read/visualize：`npx prisma studio`
 * 重启： `npm run dev`
+
+# 
+Git 在合并一个二进制文件（SQLite 数据库 dev.db）时冲突。
+数据库文件不该进版本库（每个人本地都不一样，Git 也没法合并）
+`git merge --abort`
+```
+# 1) 停止跟踪 dev.db（不删磁盘文件）
+git rm --cached dungeon-scribe/prisma/dev.db
+
+# 2) 永久忽略
+echo "**/prisma/*.db" >> .gitignore
+echo "**/prisma/*.db-journal" >> .gitignore
+
+git add .gitignore
+git commit -m "chore(prisma): stop tracking local SQLite dev.db; ignore db files"
+git push
+
+```
+
+拉完代码后，每个人本地
+```
+# 如果仓库有 migrations（通常有）
+npx prisma migrate reset   # 会清空并按迁移重建，开发环境用这个最干净
+
+# 如果没有迁移，只是想按 schema 直接建表
+# npx prisma db push
+
+# 看看表是否正常
+npx prisma studio
+
+```
