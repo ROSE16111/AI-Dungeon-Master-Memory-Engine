@@ -190,7 +190,7 @@ const MOCK_RESOURCES: CardItem[] = [
     id: "bg-1",
     title: "Baldur's Gate",
     subtitle: "View Details",
-    img: "/placeholders/bg-1.jpg",
+    img: "/historypp.png",
     tag: "Background",
     category: "Background",
   },
@@ -198,7 +198,7 @@ const MOCK_RESOURCES: CardItem[] = [
     id: "bg-2",
     title: "Forest Adventure",
     subtitle: "View Details",
-    img: "/placeholders/bg-2.jpg",
+    img: "/historypp.png",
     tag: "Background",
     category: "Background",
   },
@@ -206,7 +206,7 @@ const MOCK_RESOURCES: CardItem[] = [
     id: "bg-3",
     title: "Ancient Ruins",
     subtitle: "View Details",
-    img: "/placeholders/bg-3.jpg",
+    img: "/historypp.png",
     tag: "Background",
     category: "Background",
   },
@@ -216,7 +216,7 @@ const MOCK_RESOURCES: CardItem[] = [
     id: "map-1",
     title: "Northern Valley",
     subtitle: "Region Map",
-    img: "/placeholders/map-1.jpg",
+    img: "/historypp.png",
     tag: "Map",
     category: "Map",
   },
@@ -226,7 +226,7 @@ const MOCK_RESOURCES: CardItem[] = [
     id: "item-1",
     title: "Moonblade",
     subtitle: "Legendary Sword",
-    img: "/placeholders/item-1.jpg",
+    img: "/historypp.png",
     tag: "Item",
     category: "Others",
   },
@@ -234,7 +234,7 @@ const MOCK_RESOURCES: CardItem[] = [
     id: "npc-1",
     title: "Eldrin the Wise",
     subtitle: "Archmage • LVL 9",
-    img: "/placeholders/npc-1.jpg",
+    img: "/historypp.png",
     tag: "NPC",
     category: "Others",
   },
@@ -284,6 +284,9 @@ function ResourceCard({ it }: { it: CardItem }) {
       <CardFooter className="px-4 pb-4 pt-2 justify-end gap-2">
         <Button asChild variant="outline" size="sm">
           <Link href={`/resources/${it.id}`}>Open</Link>
+        </Button>
+        <Button asChild variant="outline" size="sm">
+          <Link href={`/resources/${it.id}`}>download</Link>
         </Button>
       </CardFooter>
     </Card>
