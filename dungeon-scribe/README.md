@@ -142,14 +142,16 @@ src/app/
 
 1.  install dependence - prisma at node_modules/ 属于项目本地依赖
     我选 @node-rs/jieba（而不是 nodejieba），它有预编译，Windows 下不需要你安装 VS C++
+
     - 在项目根目录执行
     - ```
       npm i prisma @prisma/client pdf-parse mammoth keyword-extractor nodejieba sbd zod
       npx prisma init --datasource-provider sqlite
       ```
 
+      ```
 
-        ```
+      ```
 
 Warn:
 
@@ -255,4 +257,4 @@ In the future, /api/analyze will be /api/analyze-llm to use llm to extract key i
 
 Using TypeDocs.
 
-Run to generate / regenerate: npx typedoc --entryPointStrategy Expand src 
+Run to generate / regenerate: npx typedoc --entryPointStrategy Expand src

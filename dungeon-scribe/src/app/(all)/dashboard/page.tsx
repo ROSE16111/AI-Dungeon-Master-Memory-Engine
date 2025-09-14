@@ -25,7 +25,7 @@ function wsURL() {
   return "ws://localhost:5000/audio";
 }
 
-// upload
+// upload modal
 function UploadModal({ onClose }: { onClose: () => void }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
@@ -35,7 +35,7 @@ function UploadModal({ onClose }: { onClose: () => void }) {
     "idle" | "submitting" | "submitted" | "error"
   >("idle");
 
-  const { setTranscript } = useTranscript();
+  const { setTranscript, setSummary } = useTranscript();
   const router = useRouter();
 
   const openPicker = useCallback(() => {
@@ -54,7 +54,9 @@ function UploadModal({ onClose }: { onClose: () => void }) {
     const f = files[0];
     const ext = f.name.split(".").pop()?.toLowerCase() || "";
     const mime = (f.type || "").toLowerCase();
-    const allowedExt = new Set(["txt, mp3", "m4a", "mp4", "wav", "aac"]);
+
+    // ✅ 修复拼写错误
+    const allowedExt = new Set(["txt", "mp3", "m4a", "mp4", "wav", "aac"]);
     const isAllowedByExt = allowedExt.has(ext);
     const isAllowedByMime =
       mime.startsWith("audio/") ||
@@ -74,7 +76,7 @@ function UploadModal({ onClose }: { onClose: () => void }) {
     setSubmitState("idle");
   };
 
-  //progress bar
+  // progress bar
   useEffect(() => {
     if (!file) return;
     const t = setInterval(() => {
@@ -92,11 +94,11 @@ function UploadModal({ onClose }: { onClose: () => void }) {
   const isDone = progress >= 100;
   const doneBytes = file ? (Math.min(progress, 100) / 100) * file.size : 0;
 
-  //define the transcription API endpoint
+  // API endpoint
   const TRANSCRIBE_URL =
     process.env.NEXT_PUBLIC_TRANSCRIBE_URL || "/api/transcribe";
 
-  // send the file to back-end
+  // submit
   const handleConfirmSubmit = async () => {
     if (
       !file ||
@@ -109,54 +111,33 @@ function UploadModal({ onClose }: { onClose: () => void }) {
     setSubmitState("submitting");
 
     try {
-      const ext = file.name.split(".").pop()?.toLowerCase();
-      const isTxt = ext === "txt" || file.type === "text/plain";
-
-      if (isTxt) {
-        const rawText = (await file.text()).trim();
-        const title = file.name.replace(/\.[^.]+$/, "") || "Untitled Campaign";
-
-        const res = await fetch("/api/analyze", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            title,
-            text: rawText,
-            source: "upload",
-          }),
-        });
-        if (!res.ok) throw new Error(`Analyse failed: ${res.status}`);
-        const data = await res.json(); // expects { summary: string, ... }
-
-        const summary = typeof data?.summary === "string" ? data.summary : "";
-        setTranscript(summary || rawText);
-
-        router.push("/dashboard/record");
-        setSubmitState("submitted");
-        return;
-      }
-
       const fd = new FormData();
       fd.append("file", file);
 
-      const res = await fetch(TRANSCRIBE_URL, { method: "POST", body: fd });
-      if (!res.ok) throw new Error(`Transcribe failed: ${res.status}`);
-      const data = await res.json(); // expected { text: "..." }
+      const res = await fetch("/api/upload", { method: "POST", body: fd });
+      if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
+      const data = await res.json();
 
-      const text = typeof data?.text === "string" ? data.text : "";
-      setTranscript(text);
+      // 更新上下文：原始文字 & 摘要
+      if (data.text) setTranscript(data.text);
+      if (data.summary) {
+        setSummary(data.summary);
+      } else {
+        setSummary("• 没有生成摘要，请检查模型配置。");
+      }
 
       router.push("/dashboard/record");
       setSubmitState("submitted");
     } catch (e) {
       console.error(e);
       setSubmitState("error");
-      alert("Upload/analyse/transcribe failed. See console.");
+      alert("Upload/analyze failed. See console.");
     }
   };
 
   return (
     <div className="fixed inset-0 z-[1000]">
+      {/* 背景 */}
       <div
         className="absolute inset-0 bg-black/55 backdrop-blur-[1px] z-0"
         onClick={() => {
@@ -164,6 +145,8 @@ function UploadModal({ onClose }: { onClose: () => void }) {
           onClose();
         }}
       />
+
+      {/* 主框 */}
       <div
         className="absolute z-10 rounded-[20px] shadow-2xl"
         style={{
@@ -185,7 +168,7 @@ function UploadModal({ onClose }: { onClose: () => void }) {
           ✕
         </button>
 
-        {/* drug file */}
+        {/* 文件拖拽/选择框 */}
         <div
           className="absolute cursor-pointer"
           style={{
@@ -224,14 +207,14 @@ function UploadModal({ onClose }: { onClose: () => void }) {
             <input
               ref={inputRef}
               type="file"
-              accept=".txt, .mp3,.m4a,.mp4,.wav,.aac,audio/*,video/mp4"
+              accept=".txt,.mp3,.m4a,.mp4,.wav,.aac,audio/*,video/mp4"
               className="hidden"
               onChange={(e) => handlePick(e.target.files)}
             />
           </div>
         </div>
 
-        {/* file info */}
+        {/* 文件信息 */}
         {file && (
           <div
             className="absolute left-[4%] right-[4%] rounded-[40px] bg-[#EEF1F7] px-6 py-5"
@@ -293,7 +276,7 @@ function UploadModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-//Record - WS - transcript - /dashboard/record
+// main page
 export default function DashboardPage() {
   const sp = useSearchParams();
   const router = useRouter();
@@ -311,7 +294,6 @@ export default function DashboardPage() {
     setStarting(true);
 
     try {
-      // get media
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
@@ -321,7 +303,6 @@ export default function DashboardPage() {
         },
       });
 
-      // 2) 16kHz AudioContext +  Worklet
       const ctx = new (window.AudioContext ||
         (window as any).webkitAudioContext)({ sampleRate: 16000 });
 
@@ -334,28 +315,21 @@ export default function DashboardPage() {
 
       const source = ctx.createMediaStreamSource(stream);
       const node = new AudioWorkletNode(ctx, "pcm16-frames", {
-        processorOptions: { frameSize: 320 }, // 20ms @ 16kHz
+        processorOptions: { frameSize: 320 },
       });
 
-      // avoid echo
       source.connect(node);
 
-      // use WebSocket
       const url = wsURL();
       const ws = new WebSocket(url);
 
-      // clear old transcripyt
-      ws.onopen = () => {
-        setTranscript("");
-      };
+      ws.onopen = () => setTranscript("");
 
-      // Worklet frame -> WS
       node.port.onmessage = (ev) => {
         const ab = ev.data as ArrayBuffer;
         if (ws.readyState === WebSocket.OPEN) ws.send(ab);
       };
 
-      // give the result to back-end
       ws.onmessage = (ev) => {
         const data = JSON.parse(ev.data as string);
 

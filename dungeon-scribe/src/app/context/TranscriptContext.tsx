@@ -12,16 +12,21 @@ import {
 
 type TranscriptCtxType = {
   transcript: string;
-  setTranscript: Dispatch<SetStateAction<string>>; //
+  setTranscript: Dispatch<SetStateAction<string>>;
+  summary: string;
+  setSummary: Dispatch<SetStateAction<string>>;
 };
 
 const TranscriptContext = createContext<TranscriptCtxType | null>(null);
 
 export function TranscriptProvider({ children }: { children: ReactNode }) {
   const [transcript, setTranscript] = useState<string>("");
+  const [summary, setSummary] = useState<string>("");
 
   return (
-    <TranscriptContext.Provider value={{ transcript, setTranscript }}>
+    <TranscriptContext.Provider
+      value={{ transcript, setTranscript, summary, setSummary }}
+    >
       {children}
     </TranscriptContext.Provider>
   );

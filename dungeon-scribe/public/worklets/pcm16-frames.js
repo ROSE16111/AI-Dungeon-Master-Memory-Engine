@@ -17,7 +17,6 @@ class PCM16FrameProcessor extends AudioWorkletProcessor {
     this._buf = merged;
   }
 
-  //Emit as many 20ms frames as possible
   _drainFrames() {
     while (this._buf.length >= this.frameSize) {
       const frameF32 = this._buf.subarray(0, this.frameSize);

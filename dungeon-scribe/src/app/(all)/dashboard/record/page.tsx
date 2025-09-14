@@ -474,8 +474,11 @@ function CharacterCarouselStacked() {
 
 /* 仅 Sessions 视图使用：羊皮纸“内部”的滚动内容（字幕从纸内出现而不是从网页底部出现）  可连接LLM接口*/
 function SessionsInsidePaper() {
-  // demo 文本：一段=一个 Block；第一行是标题，其余是正文
-  const raw = `Arrival in Town
+  const { summary } = useTranscript();
+
+  const raw =
+    summary ||
+    `Arrival in Town
 The adventurers arrived in town looking for work. An old man directed them to a brewing company owned by a gnome named Glowkindle, who needed help clearing out giant rats in his cellar.
 
 Brewing Company Encounter

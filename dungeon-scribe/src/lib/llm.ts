@@ -1,13 +1,13 @@
 import { Ollama } from "ollama";
 
 const client = new Ollama({ host: process.env.OLLAMA_HOST });
-const model  = process.env.OLLAMA_MODEL ?? "phi3:medium";
+const model = process.env.OLLAMA_MODEL ?? "phi3:medium";
 
 const LONG_THRESHOLD_WORDS = 1000;
-const CHUNK_TEXT           = 700;
-const CHUNK_OVERLAP        = 70;
-const TEMP                 = 0.1;
-const MERGE_BATCH          = 6;
+const CHUNK_TEXT = 700;
+const CHUNK_OVERLAP = 70;
+const TEMP = 0.1;
+const MERGE_BATCH = 6;
 
 /**
  * Splits a long transcript into overlapping chunks of text.
@@ -17,16 +17,20 @@ const MERGE_BATCH          = 6;
  * @param overlap - Number of overlapping words between chunks (default: `CHUNK_OVERLAP`).
  * @returns Array of chunk strings, each containing up to `size` words.
  */
-function splitIntoChunks(text: string, size = CHUNK_TEXT, overlap = CHUNK_OVERLAP): string[] {
-    const words = text.trim().split(/\s+/);
-    const chunks: string[] = [];
-    for (let i = 0; i < words.length; i += (size - overlap)) {
-        const slice = words.slice(i, i + size);
-        if (!slice.length) break;
-        chunks.push(slice.join(" "));
-        if (i + size >= words.length) break;
-    }
-    return chunks;
+function splitIntoChunks(
+  text: string,
+  size = CHUNK_TEXT,
+  overlap = CHUNK_OVERLAP
+): string[] {
+  const words = text.trim().split(/\s+/);
+  const chunks: string[] = [];
+  for (let i = 0; i < words.length; i += size - overlap) {
+    const slice = words.slice(i, i + size);
+    if (!slice.length) break;
+    chunks.push(slice.join(" "));
+    if (i + size >= words.length) break;
+  }
+  return chunks;
 }
 
 /**
@@ -37,19 +41,59 @@ function splitIntoChunks(text: string, size = CHUNK_TEXT, overlap = CHUNK_OVERLA
  * @returns LLM response.
  * @throws Rethrows errors from Ollama client after logging.
  */
+
+const OLLAMA_HOST = process.env.OLLAMA_HOST || "http://localhost:11434";
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "phi3:medium";
+
+/**
+ * Calls the Ollama REST API with a given prompt.
+ */
 async function callLLM(prompt: string, label: string): Promise<string> {
-    console.time(label);
-    try {
-        const res = await client.generate({ model, prompt, options: { temperature: TEMP } });
-        const out = (res.response ?? "").trim();
-        console.timeEnd(label);
-        return out;
-    } catch (err: any) {
-        console.timeEnd(label);
-        console.error(`${label}_ERROR`, { msg: err?.message, code: err?.code, name: err?.name });
-        throw err;
+  console.time(label);
+  try {
+    const res = await fetch(`${OLLAMA_HOST}/api/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: OLLAMA_MODEL,
+        prompt,
+        stream: false,
+        options: { temperature: TEMP },
+      }),
+    });
+
+    if (!res.ok) {
+      throw new Error(`Ollama API error: ${res.status} ${res.statusText}`);
     }
+
+    const data = await res.json();
+    const out = (data.response ?? "").trim();
+    console.timeEnd(label);
+    return out;
+  } catch (err: any) {
+    console.timeEnd(label);
+    console.error(`${label}_ERROR`, {
+      msg: err?.message,
+      code: err?.code,
+      name: err?.name,
+    });
+    throw err;
+  }
 }
+
+// async function callLLM(prompt: string, label: string): Promise<string> {
+//     console.time(label);
+//     try {
+//         const res = await client.generate({ model, prompt, options: { temperature: TEMP } });
+//         const out = (res.response ?? "").trim();
+//         console.timeEnd(label);
+//         return out;
+//     } catch (err: any) {
+//         console.timeEnd(label);
+//         console.error(`${label}_ERROR`, { msg: err?.message, code: err?.code, name: err?.name });
+//         throw err;
+//     }
+// }
 
 /**
  * Summarizes a single transcript chunk into factual bullet point summary.
@@ -59,10 +103,12 @@ async function callLLM(prompt: string, label: string): Promise<string> {
  * @param total - Total number of chunks.
  * @returns LLM-produced summary of the chunk.
  */
-async function summarizeChunk(chunk: string, idx: number, total: number): Promise<string> {
-    const prompt = 
-    
-        `You are a precise note taker for a Dungeons & Dragons session.
+async function summarizeChunk(
+  chunk: string,
+  idx: number,
+  total: number
+): Promise<string> {
+  const prompt = `You are a precise note taker for a Dungeons & Dragons session.
 
         CHUNK ${idx + 1} OF ${total} — MODE: VERBATIM-ONLY RECAP
         Rules:
@@ -79,7 +125,7 @@ async function summarizeChunk(chunk: string, idx: number, total: number): Promis
         CHUNK TEXT:
         ${chunk}`;
 
-    return callLLM(prompt, `LLM_chunk_${idx+1}/${total}`);
+  return callLLM(prompt, `LLM_chunk_${idx + 1}/${total}`);
 }
 
 /**
@@ -90,20 +136,20 @@ async function summarizeChunk(chunk: string, idx: number, total: number): Promis
  * @returns A single merged summary string.
  */
 async function hierarchicalMerge(summaries: string[]): Promise<string> {
-    let layer = summaries.slice();
-    let round = 1;
+  let layer = summaries.slice();
+  let round = 1;
 
-    while (layer.length > 1) {
-        const next: string[] = [];
-        for (let i = 0; i < layer.length; i += MERGE_BATCH) {
-        const group = layer.slice(i, i + MERGE_BATCH);
-        const merged = await mergeSummaries(group);
-        next.push(merged.trim());
-        }
-        layer = next;
-        round++;
+  while (layer.length > 1) {
+    const next: string[] = [];
+    for (let i = 0; i < layer.length; i += MERGE_BATCH) {
+      const group = layer.slice(i, i + MERGE_BATCH);
+      const merged = await mergeSummaries(group);
+      next.push(merged.trim());
     }
-    return layer[0] ?? "";
+    layer = next;
+    round++;
+  }
+  return layer[0] ?? "";
 }
 
 /**
@@ -113,7 +159,7 @@ async function hierarchicalMerge(summaries: string[]): Promise<string> {
  * @returns LLM-produced merged bullet point summary.
  */
 async function mergeSummaries(summaries: string[]): Promise<string> {
-    const prompt = `Combine the given Dungeons & Dragons chunk summaries into ONE faithful recap.
+  const prompt = `Combine the given Dungeons & Dragons chunk summaries into ONE faithful recap.
 
         MODE: VERBATIM-ONLY MERGE
         - Use ONLY facts that appear in the chunk summaries below.
@@ -127,11 +173,11 @@ async function mergeSummaries(summaries: string[]): Promise<string> {
         - Focus on the following (if stated): plot beats, explicit NPC names/roles, locations actually visited, items gained/lost, important player decisions and their consequences, hooks/next steps that were said.
 
         CHUNK SUMMARIES:
-        ${summaries.map((s, i) => `--- CHUNK ${i+1} ---\n${s}`).join("\n")}
+        ${summaries.map((s, i) => `--- CHUNK ${i + 1} ---\n${s}`).join("\n")}
 
         FINAL SUMMARY (bullets only):
         `;
-    return callLLM(prompt, "LLM_merge");
+  return callLLM(prompt, "LLM_merge");
 }
 
 /**
@@ -145,15 +191,13 @@ async function mergeSummaries(summaries: string[]): Promise<string> {
  * @returns Final summary as a bullet point string, trimmed if very long.
  */
 export async function summarizeDnDSession(rawText: string): Promise<string> {
-    const text = rawText?.trim() ?? "";
-    if (!text) return "";
+  const text = rawText?.trim() ?? "";
+  if (!text) return "";
 
-    const wordCount = text.split(/\s+/).length;
+  const wordCount = text.split(/\s+/).length;
 
-    if (wordCount <= LONG_THRESHOLD_WORDS) {
-        const prompt = 
-        
-        `You are a faithful note-taker for a Dungeons & Dragons session.
+  if (wordCount <= LONG_THRESHOLD_WORDS) {
+    const prompt = `You are a faithful note-taker for a Dungeons & Dragons session.
 
         MODE: VERBATIM-ONLY RECAP
         - Use ONLY facts explicitly present in the transcript.
@@ -169,40 +213,37 @@ export async function summarizeDnDSession(rawText: string): Promise<string> {
         TRANSCRIPT:
         ${text}`;
 
-        const out = await callLLM(prompt, "LLM_single");
-        return out;
-    }
+    const out = await callLLM(prompt, "LLM_single");
+    return out;
+  }
 
-    const chunks = splitIntoChunks(text);
-    const miniSummaries: string[] = [];
+  const chunks = splitIntoChunks(text);
+  const miniSummaries: string[] = [];
 
-    for (let i = 0; i < chunks.length; i++) {
-        try {
-        const s = await summarizeChunk(chunks[i], i, chunks.length);
-        if (s) miniSummaries.push(s);
-        } catch {
-        }
-    }
+  for (let i = 0; i < chunks.length; i++) {
+    try {
+      const s = await summarizeChunk(chunks[i], i, chunks.length);
+      if (s) miniSummaries.push(s);
+    } catch {}
+  }
 
-    if (miniSummaries.length === 0) {
-        const clipped = text.split(/\s+/).slice(0, CHUNK_TEXT).join(" ");
-        const fallbackPrompt = `You are a precise session scribe for a Dungeons & Dragons game.
+  if (miniSummaries.length === 0) {
+    const clipped = text.split(/\s+/).slice(0, CHUNK_TEXT).join(" ");
+    const fallbackPrompt = `You are a precise session scribe for a Dungeons & Dragons game.
         Summarize as ≤10 bullets focusing on main story beats only (plot, NPCs, locations, items, decisions/consequences, next steps). 
         No fluff.
 
         SESSION (CLIPPED):
         ${clipped}`;
-        const out = await callLLM(fallbackPrompt, "LLM_fallback_single");
-        return out;
-    }
+    const out = await callLLM(fallbackPrompt, "LLM_fallback_single");
+    return out;
+  }
 
-    try {
-        const merged = await hierarchicalMerge(miniSummaries);
-        if (merged) return merged.trim();
-    } catch {
-    }
+  try {
+    const merged = await hierarchicalMerge(miniSummaries);
+    if (merged) return merged.trim();
+  } catch {}
 
-    const joined = miniSummaries.join("\n");
-    return joined.length > 4000 ? joined.slice(0, 4000) + "\n…"
-                                : joined;
+  const joined = miniSummaries.join("\n");
+  return joined.length > 4000 ? joined.slice(0, 4000) + "\n…" : joined;
 }

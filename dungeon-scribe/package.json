@@ -26,7 +26,7 @@
     "keyword-extractor": "^0.0.28",
     "lucide-react": "^0.539.0",
     "mammoth": "^1.10.0",
-    "next": "15.4.6",
+    "next": "^15.5.3",
     "ollama": "^0.5.17",
     "pdf-parse": "^1.1.1",
     "pg": "^8.16.3",
