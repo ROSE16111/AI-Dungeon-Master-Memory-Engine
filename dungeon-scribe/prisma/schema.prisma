@@ -1,13 +1,65 @@
-
+// ---------- Prisma Client ----------
 generator client {
   provider = "prisma-client-js"
 }
 
+// ---------- Database ----------
 datasource db {
   provider = "sqlite"
   url      = env("DATABASE_URL")
 }
 
+// ---------- Enums ----------
+enum SummaryType {
+  session
+  character
+}
+
+enum ItemKind {
+  WEAPON
+  ARMOR
+  CONSUMABLE
+  TOOL
+  KEY
+  TREASURE
+  MISC
+}
+
+enum LocationKind {
+  WORLD
+  REGION
+  CITY
+  DUNGEON
+  ROOM
+  OTHER
+}
+
+enum EventType {
+  ACQUIRE_ITEM
+  DROP_ITEM
+  TRANSFER_ITEM
+  TRAVEL_TO
+  STAT_SET
+  NOTE
+}
+
+enum StatType {
+  STR
+  DEX
+  CON
+  INT
+  WIS
+  CHA
+}
+
+enum PresenceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  LEFT_EARLY
+}
+
+// ---------- Core Models ----------
 model Campaign {
   id          String   @id @default(uuid())
   title       String
@@ -17,14 +69,28 @@ model Campaign {
   roles       Role[]
   allTxts     AllTxt[]
   summaries   Summary[]
+  sessions    Session[]
+
+  // Convenience backrefs (optional)
+  items         Item[]
+  locations     Location[]
+  events        Event[]
+  possessions   Possession[]
+  statSnapshots StatSnapshot[]
+  aliases       Alias[]
 }
 
-model Role {
+model Role { // Character
   id          String   @id @default(uuid())
   name        String
   level       Int
   campaignId  String
   campaign    Campaign @relation(fields: [campaignId], references: [id])
+
+  sessions       SessionParticipant[] // attendance
+  possessions    Possession[]         // back-relation for Possession.character
+  statSnapshots  StatSnapshot[]       // back-relation for StatSnapshot.character
+  aliases        Alias[]              // back-relation for Alias.character
 }
 
 model AllTxt {
@@ -33,6 +99,15 @@ model AllTxt {
   campaignId  String
   campaign    Campaign @relation(fields: [campaignId], references: [id])
   createdAt   DateTime @default(now())
+
+  // Link each transcript chunk to a Session (optional)
+  sessionId   String?
+  session     Session?  @relation(fields: [sessionId], references: [id])
+
+  // Back-relation for TranscriptSpan.allTxt
+  spans       TranscriptSpan[]
+
+  @@index([sessionId])
 }
 
 model Summary {
@@ -42,34 +117,202 @@ model Summary {
   createdAt    DateTime    @default(now())
   roleName     String?
   campaignId   String
-  imageBase64  String?     
+  imageBase64  String?
   campaign     Campaign    @relation(fields: [campaignId], references: [id])
 }
 
+// ---------- Sessions & Attendance ----------
+model Session {
+  id                String     @id @default(uuid())
+  campaignId        String
+  campaign          Campaign   @relation(fields: [campaignId], references: [id])
 
-enum SummaryType {
-  session
-  character
+  sessionNumber     Int
+  title             String
+  date              DateTime   @default(now())
+  summary           String?
+  notes             String?
+
+  primaryLocationId String?
+  primaryLocation   Location?  @relation(fields: [primaryLocationId], references: [id])
+
+  // Backrefs
+  participants      SessionParticipant[]
+  allTxts           AllTxt[]
+  events            Event[]
+
+  @@unique([campaignId, sessionNumber])
+  @@index([campaignId, date])
+  @@index([primaryLocationId])
 }
 
+model SessionParticipant {
+  id         String         @id @default(uuid())
+  sessionId  String
+  roleId     String
 
+  session    Session        @relation(fields: [sessionId], references: [id])
+  role       Role           @relation(fields: [roleId], references: [id])
 
+  presence   PresenceStatus @default(PRESENT)
+  joinedAt   DateTime?
+  leftAt     DateTime?
+  notes      String?
 
+  @@unique([sessionId, roleId])
+  @@index([roleId])
+}
 
+// ---------- Knowledge Graph ----------
+model Item {
+  id         String    @id @default(uuid())
+  name       String
+  kind       ItemKind?
+  notes      String?
+  campaignId String
+  campaign   Campaign  @relation(fields: [campaignId], references: [id])
 
+  possessions Possession[]
 
+  @@index([campaignId, name])
+}
 
+model Location {
+  id               String      @id @default(uuid())
+  name             String
+  kind             LocationKind?
+  campaignId       String
+  campaign         Campaign    @relation(fields: [campaignId], references: [id])
 
+  // Hierarchy (e.g., City -> District -> Room)
+  parentLocationId String?
+  parent           Location?   @relation("LocationHierarchy", fields: [parentLocationId], references: [id])
+  children         Location[]  @relation("LocationHierarchy")
 
+  // Back-relations
+  events            Event[]    // events at this location
+  primaryForSessions Session[] // sessions that set this as primaryLocation
 
+  @@index([campaignId, name])
+  @@index([parentLocationId])
+}
 
-//model Session {
-//  id           String   @id @default(cuid())
-//  title        String
-//  language     String   @default("auto")
-//  source       String   @default("live") // live | upload
-//  text         String
-//  keyPhrases   Json
-//  keySentences Json
-//  createdAt    DateTime @default(now())
-//}
+model Event {
+  id          String       @id @default(uuid())
+  type        EventType
+  occurredAt  DateTime     @default(now())
+  summary     String?
+  campaignId  String
+  campaign    Campaign     @relation(fields: [campaignId], references: [id])
+
+  locationId  String?
+  location    Location?    @relation(fields: [locationId], references: [id])
+
+  // Grouping by session
+  sessionId   String?
+  session     Session?     @relation(fields: [sessionId], references: [id])
+
+  // Provenance spans (many-to-many)
+  spans       EventSpan[]
+
+  // Reverse links for explainability
+  startOfPossessions Possession[] @relation("StartEvent")
+  endOfPossessions   Possession[] @relation("EndEvent")
+
+  // Reverse link from StatSnapshot.sourceEvent
+  statSnapshots      StatSnapshot[]
+
+  @@index([campaignId, occurredAt])
+  @@index([locationId, occurredAt])
+  @@index([sessionId, occurredAt])
+}
+
+model TranscriptSpan {
+  id        String   @id @default(uuid())
+  // Stable external identifier (e.g., hash) — useful later for Chroma
+  spanId    String   @unique
+  allTxtId  String
+  allTxt    AllTxt   @relation(fields: [allTxtId], references: [id])
+
+  speaker   String?
+  startMs   Int      // start timestamp within source (ms)
+  endMs     Int      // end timestamp within source (ms)
+  text      String
+
+  events    EventSpan[]
+
+  @@index([allTxtId])
+  @@index([speaker])
+}
+
+model EventSpan {
+  // Join table: Event <-> TranscriptSpan
+  eventId          String
+  transcriptSpanId String
+
+  event            Event          @relation(fields: [eventId], references: [id])
+  span             TranscriptSpan @relation(fields: [transcriptSpanId], references: [id])
+
+  @@id([eventId, transcriptSpanId])
+  @@index([transcriptSpanId])
+}
+
+model Possession {
+  id           String   @id @default(uuid())
+  characterId  String
+  character    Role     @relation(fields: [characterId], references: [id])
+
+  itemId       String
+  item         Item     @relation(fields: [itemId], references: [id])
+
+  // Validity window (null endAt = currently owned)
+  startAt      DateTime @default(now())
+  endAt        DateTime?
+
+  // Explainability
+  startEventId String?
+  startEvent   Event?   @relation("StartEvent", fields: [startEventId], references: [id])
+
+  endEventId   String?
+  endEvent     Event?   @relation("EndEvent", fields: [endEventId], references: [id])
+
+  campaignId   String
+  campaign     Campaign @relation(fields: [campaignId], references: [id])
+
+  @@index([characterId, endAt]) // fast "current inventory"
+  @@index([itemId, endAt])
+  @@index([campaignId])
+  @@unique([characterId, itemId, startAt])
+}
+
+model StatSnapshot {
+  id           String    @id @default(uuid())
+  characterId  String
+  character    Role      @relation(fields: [characterId], references: [id])
+
+  statType     StatType
+  value        Int
+  effectiveAt  DateTime  @default(now())
+
+  sourceEventId String?
+  sourceEvent   Event?    @relation(fields: [sourceEventId], references: [id])
+
+  campaignId   String
+  campaign     Campaign  @relation(fields: [campaignId], references: [id])
+
+  @@index([characterId, statType, effectiveAt])
+  @@index([campaignId])
+}
+
+model Alias {
+  id           String   @id @default(uuid())
+  characterId  String
+  character    Role     @relation(fields: [characterId], references: [id])
+  alias        String
+
+  campaignId   String
+  campaign     Campaign @relation(fields: [campaignId], references: [id])
+
+  @@unique([campaignId, alias])
+  @@index([characterId])
+}
