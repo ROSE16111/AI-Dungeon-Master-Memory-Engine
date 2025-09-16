@@ -1,0 +1,5 @@
+tkinter
+requests
+PyMuPDF
+PyPDF2
+python-docx
