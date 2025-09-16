@@ -195,11 +195,32 @@ export default function LoginPage() {
   }));
   setRole(name);
 }
-  function onSubmit(e: FormEvent<HTMLFormElement>) {
+
+// 新增：把当前 Campaign 写入 httpOnly Cookie
+  async function setCurrentCampaignCookie(campaignTitle: string, remember: boolean) {
+    const res = await fetch("/api/current-campaign", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      // 这里传 title，后端会用 title 查 id 再写 cookie（如果你的后端只收 id，也可把 title 换成 id）
+      body: JSON.stringify({ title: campaignTitle, remember }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || "Failed to set current campaign");
+    }
+}
+
+  async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (!canSubmit) return;
-    router.push("/dashboard");
-  }
+    if (!canSubmit || !campaign) return;
+    try {
+      await setCurrentCampaignCookie(campaign, remember); // ← 关键：把选中的 campaign 写入 Cookie
+      // 这里如果你还想同时记住 role，也可以再调一个 /api/current-role 接口写 cookie
+      router.push("/dashboard");
+    } catch (err: any) {
+      alert(err?.message || "Login failed");
+    }
+}
 
   return (
     <div className="h-screen w-screen grid grid-cols-1 md:grid-cols-2">

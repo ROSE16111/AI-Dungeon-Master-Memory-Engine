@@ -21,6 +21,7 @@ export function TopBar() {
     { label: 'DASHBOARD', href: '/dashboard' },
     { label: 'RESOURCE', href: '/resources' },
     { label: 'HISTORY', href: '/history' },
+    {label: 'SUMMARY', href: '/campaigns/${campaignId}/summary'}
   ];
 
   return (
@@ -38,7 +39,7 @@ export function TopBar() {
         {/* 左：录制按钮（红点 + 外环 + 呼吸） */}
         <button
           aria-label="Start recording"
-          onClick={() => router.push('/dashboard?open=record')}
+          onClick={() => router.push('/dashboard/record')}
           className="relative h-9 w-9 rounded-full grid place-items-center ring-1 ring-white/30 hover:ring-white/60 transition"
           title="Record"
         >

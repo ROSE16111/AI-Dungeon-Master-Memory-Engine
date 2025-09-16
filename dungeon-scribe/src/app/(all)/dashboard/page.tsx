@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useTranscript } from "../../context/TranscriptContext";
 
+
 // size
 function formatSize(n: number) {
   if (n < 1024) return `${n} B`;
@@ -37,6 +38,7 @@ function UploadModal({ onClose }: { onClose: () => void }) {
 
   const { setTranscript, setSummary } = useTranscript();
   const router = useRouter();
+  
 
   const openPicker = useCallback(() => {
     if (!inputRef.current) return;
@@ -284,10 +286,30 @@ export default function DashboardPage() {
 
   const [openUpload, setOpenUpload] = useState(false);
   const [starting, setStarting] = useState(false);
+  // 当前 Campaign 标题
+  const [campaignTitle, setCampaignTitle] = useState<string | null>(null);
 
   useEffect(() => {
     if (sp.get("open") === "upload") setOpenUpload(true);
   }, [sp]);
+
+  
+  // NEW: 读取当前 campaign
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/current-campaign", { cache: "no-store" });
+        if (!res.ok) throw new Error("failed");
+        const data = await res.json(); // { id, title } | { id: null, title: null }
+        setCampaignTitle(data?.title ?? null);
+
+        // 如果你想“没选就回登录”，解开下面这行：
+        // if (!data?.id) router.push("/login");
+      } catch {
+        setCampaignTitle(null);
+      }
+    })();
+  }, [router]);
 
   const startRecording = useCallback(async () => {
     if (starting) return;
@@ -420,7 +442,9 @@ export default function DashboardPage() {
       >
         Welcome back,
         <br />
-        Team TAM！
+        <span className="italic">
+          {campaignTitle ?? "your next adventure"}
+        </span>
       </div>
 
       {openUpload && <UploadModal onClose={() => setOpenUpload(false)} />}

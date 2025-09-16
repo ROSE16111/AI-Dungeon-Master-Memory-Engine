@@ -253,6 +253,36 @@ In the future, /api/analyze will be /api/analyze-llm to use llm to extract key i
 选择 Cinzel
 `src/styles/fonts.ts`
 
+### storage
+把选中的 campaignId 存进 cookie（或服务端 session），这样：
+
+换页面不会丢；
+
+SSR 时也能拿到；
+
+多端共享（如果你存在数据库里，并在用户表里写 lastSelectedCampaignId）
+1. 创建 API 路由，负责设置/读取当前 Campaign
+2. 在 Login 页面提交时写 Cookie 并跳转
+  * 在组件里新增一个函数：把选中的 campaign 写进 Cookie
+  * 把 onSubmit 改成异步，先写 Cookie 再跳转
+3. 在状态区加一个campaign state
+   `//const [campaignTitle, setCampaignTitle] = useState<string | null>(null);`
+4. 组件挂载后去拉取当前 Campaign（从 Cookie 读，后端返回）
+上面的前端会向 POST /api/current-campaign 发送：
+
+{ "title": "<你选择的campaign名称>", "remember": true/false }
+
+request: app/api/**current-campaign**/route.ts
+```
+res.cookies.set("currentCampaignId", id, {
+  path: "/",
+  httpOnly: true,
+  sameSite: "lax",
+  secure: process.env.NODE_ENV === "production",
+  maxAge: remember ? 60 * 60 * 24 * 30 : undefined,
+});
+```
+Cookie 的 HttpOnly 让它只能在服务器端读，客户端用一个 GET 接口“转述”给页面就行
 ### Documention
 
 Using TypeDocs.
