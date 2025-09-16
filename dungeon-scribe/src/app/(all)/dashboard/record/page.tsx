@@ -980,10 +980,17 @@ export default function RecordPage() {
   };
 
   // 搜索提交 + 上/下一条
+  // 搜索提交 + 上/下一条
   const onSearch = () => {
-    setSearchTerm(q.trim());
-    setActiveHit(0);
+    const key = q.trim();
+    if (view === "sessions") {
+      setSearchTerm(key);
+      setActiveHit(0);
+    } else {
+      setCharSearchKey(key); // character 视图用这个
+    }
   };
+
   const onPrev = () => {
     if (hitCount > 0) setActiveHit((i) => (i - 1 + hitCount) % hitCount);
   };
