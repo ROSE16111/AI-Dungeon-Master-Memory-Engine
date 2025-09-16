@@ -21,9 +21,9 @@ function wsURL() {
   if (typeof window !== "undefined") {
     const proto = window.location.protocol === "https:" ? "wss" : "ws";
     const host = window.location.hostname;
-    return `${proto}://${host}:5000/audio`;
+    return `${proto}://${host}:8000/audio`;
   }
-  return "ws://localhost:5000/audio";
+  return "ws://localhost:8000/audio";
 }
 
 // upload modal

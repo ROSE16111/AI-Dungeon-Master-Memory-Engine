@@ -105,8 +105,8 @@ async def audio_handler(websocket):
         print("[Client] disconnected")
 
 async def main():
-    async with websockets.serve(audio_handler, "0.0.0.0", 5000):
-        print("[Server] running on ws://0.0.0.0:5000/audio")
+    async with websockets.serve(audio_handler, "0.0.0.0", 8000):
+        print("[Server] running on ws://0.0.0.0:8000/audio")
         await asyncio.Future()
 
 if __name__ == "__main__":
