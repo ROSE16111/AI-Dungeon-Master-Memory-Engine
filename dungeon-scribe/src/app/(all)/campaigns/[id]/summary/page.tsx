@@ -2,20 +2,15 @@
 
 import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
+import { useRouter } from "next/navigation"; // back 按钮
 
 /* Adjust parameters */
-const HEADER_H = 88; // Navigation bar height
-const FILTER_H = 90; // Height of the “SESSIONS / CHARACTERS” title container
-const SECTION_PULLUP = 32; // Move the parchment section upward
-const CARD_PULLUP = 16; // White card position relative to the parchment
-const BOTTOM_GAP = 120; // Bottom margin, avoid sticking to the top of the webpage
+const HEADER_H = 88;
+const FILTER_H = 90;
+const SECTION_PULLUP = 32;
+const BOTTOM_GAP = 120;
 
-/* Adjust parchment position */
-const PARCHMENT_SCALE_X = 1.4; // Stretch wider horizontally
-const PARCHMENT_SCALE_Y = 1.6; // Stretch longer vertically
-const PARCHMENT_SHIFT_Y = -50; // Move parchment upward, negative = up
-
-// Prevent page scrolling, fix screen height to 100%
+/* 防滚动 */
 function useLockBodyScroll() {
   useEffect(() => {
     const prev = document.body.style.overflow;
@@ -26,7 +21,69 @@ function useLockBodyScroll() {
   }, []);
 }
 
-// Display title and dropdown menu for switching views
+/*=========== Component 0: Top-right Search（受控） ===========*/
+function SearchMapsBar({
+  q,
+  setQ,
+  onSearch,
+}: {
+  q: string;
+  setQ: (v: string) => void;
+  onSearch: () => void;
+}) {
+  const onSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    onSearch();
+  };
+
+  return (
+    <>
+      {/* 搜索框容器：右上角绝对定位（沿用像素坐标） */}
+      <form
+        onSubmit={onSubmit}
+        className="absolute"
+        style={{ left: 1096, top: 104, width: 260, height: 45, zIndex: 50 }}
+      >
+        {/* 输入框 */}
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="SEARCH..."
+          aria-label="Search"
+          className="h-full w-full rounded-full border-2 border-white/90 bg-transparent
+                     px-5 pr-12 text-white placeholder:font-bold placeholder:text-white/90
+                     outline-none focus:ring-2 focus:ring-white/60 cursor-text"
+          style={{
+            fontFamily: '"Roboto", sans-serif',
+            fontWeight: 700,
+            fontSize: 16,
+          }}
+          title="输入角色名并回车"
+        />
+        {/* 右侧放大镜按钮 */}
+        <button
+          type="submit"
+          aria-label="Submit search"
+          className="absolute right-2 top-1/2 -translate-y-1/2 h-[34px] w-[34px]
+                     grid place-items-center rounded-full hover:opacity-90 active:scale-95 transition cursor-pointer"
+          title="Search"
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+            <circle cx="11" cy="11" r="7" stroke="white" strokeWidth="2" />
+            <path
+              d="M20 20L17 17"
+              stroke="white"
+              strokeWidth="2"
+              strokeLinecap="round"
+            />
+          </svg>
+        </button>
+      </form>
+    </>
+  );
+}
+
+/*=========== Components 1: 顶部标题 + 视图切换 ===========*/
 function TitleWithFilter({
   value,
   onChange,
@@ -34,9 +91,9 @@ function TitleWithFilter({
   value: "sessions" | "character";
   onChange: (v: "sessions" | "character") => void;
 }) {
-  const [open, setOpen] = useState(false); // Dropdown menu
-  const ref = useRef<HTMLDivElement>(null); // Track mouse click position
-  // Close dropdown menu when clicking outside component
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     const onDoc = (e: MouseEvent) => {
       if (!ref.current) return;
@@ -52,15 +109,11 @@ function TitleWithFilter({
     <div
       ref={ref}
       className="relative mx-auto flex items-center justify-center"
-      style={{ height: FILTER_H, width: 1160 }}
+      style={{ height: FILTER_H, maxWidth: 1160, width: "100%" }}
     >
       <h1
-        className="text-white font-bold select-none"
-        style={{
-          fontFamily: '"Cinzel", serif',
-          fontSize: 55,
-          lineHeight: "74px",
-        }}
+        className="text-white font-bold select-none text-[40px] sm:text-[48px] md:text-[55px] leading-[1.35]"
+        style={{ fontFamily: '"Cinzel", serif' }}
       >
         {label}
       </h1>
@@ -68,6 +121,8 @@ function TitleWithFilter({
         aria-label="Toggle"
         onClick={() => setOpen((s) => !s)}
         className="ml-3 h-6 w-6 grid place-items-center rounded-md hover:bg-white/10 transition cursor-pointer"
+        style={{ alignSelf: "center" }}
+        title="Switch"
       >
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
           <path
@@ -105,7 +160,7 @@ function TitleWithFilter({
     </div>
   );
 }
-// Control style of dropdown menu items
+
 function MenuItem({
   children,
   active,
@@ -118,7 +173,6 @@ function MenuItem({
   return (
     <button
       onClick={onClick}
-      // Style: full width, left-aligned text, pointer cursor
       className={`w-full text-left px-4 py-2 cursor-pointer transition ${
         active ? "bg-white/15" : "hover:bg-white/10"
       }`}
@@ -129,22 +183,50 @@ function MenuItem({
   );
 }
 
-/******** Main part of summary ***********/
+/********  Component 2: 页面主体（仅在 Characters 使用搜索）  ***********/
 export default function SummaryPage() {
   useLockBodyScroll();
-  const [view, setView] = useState<"sessions" | "character">("sessions"); // Current view state
+  const [view, setView] = useState<"sessions" | "character">("sessions");
+  const router = useRouter();
+
+  // 搜索：仅在 character 视图里生效
+  const [q, setQ] = useState("");
+  const [charSearchKey, setCharSearchKey] = useState("");
+
+  const handleSearch = () => {
+    const query = q.trim();
+    if (view === "character") {
+      setCharSearchKey(query); // 交给轮播组件去居中并做动画
+    }
+    // sessions 不联动（按你的要求先不做）
+  };
+
+  const onChangeView = (v: "sessions" | "character") => {
+    setView(v);
+    setQ("");
+    setCharSearchKey("");
+  };
 
   return (
     <div className="fixed inset-0 overflow-hidden text-white">
-      {/* Avoid navigation bar */}
+      {/* 左上角返回 */}
+      <button
+        onClick={() => router.back()}
+        className="absolute top-26 left-6 z-50 p-2 rounded-md bg-black/60 hover:bg-black/80 transition text-white"
+      >
+        ← Back
+      </button>
+
+      {/* 右上角搜索 */}
+      <SearchMapsBar q={q} setQ={setQ} onSearch={handleSearch} />
+
+      {/* 主体 */}
       <main
         className="absolute inset-x-0 bottom-0 overflow-hidden flex flex-col items-center"
         style={{ top: HEADER_H }}
       >
-        {/* Top title and dropdown filter */}
-        <TitleWithFilter value={view} onChange={setView} />
+        <TitleWithFilter value={view} onChange={onChangeView} />
 
-        {/* Content area */}
         <div className="relative w-full h-full">
           <section
             className="absolute left-1/2 -translate-x-1/2"
@@ -155,27 +237,25 @@ export default function SummaryPage() {
               overflow: "visible",
             }}
           >
-            {/* Parchment as background */}
             <ParchmentBackground />
 
-            {/* Sessions view with white card background */}
+            {/* Sessions 维持原样，不接入搜索 */}
             {view === "sessions" && <CardOnPaper />}
 
-            {/* Characters view with stacked carousel */}
+            {/* Characters：接入 searchName 实现“居中+动画” */}
             {view === "character" && (
               <div
-                className="absolute z-[3]" // The topmost card
+                className="absolute z-[3]"
                 style={{
-                  // —— Adjust carousel position on parchment —— //
                   left: "50%",
                   transform: "translateX(-50%)",
-                  top: 160, // Move carousel vertically
-                  width: 760, // Control carousel width
-                  height: 460, // Carousel height
+                  top: 160,
+                  width: 760,
+                  height: 460,
                   pointerEvents: "auto",
                 }}
               >
-                <CharacterCarouselStacked />
+                <CharacterCarouselStacked searchName={charSearchKey} />
               </div>
             )}
           </section>
@@ -185,18 +265,24 @@ export default function SummaryPage() {
   );
 }
 
-/** Parchment background setup */
+/**====== Component 3: 羊皮纸背景 */
 function ParchmentBackground() {
   return (
-    <div className="absolute inset-0 z-[1] pointer-events-none select-none flex justify-center">
+    <div
+      className="fixed z-[1] pointer-events-none select-none flex justify-center"
+      style={{
+        top: "-10vh",
+        height: "85vh",
+        width: "60vw",
+        left: "50%",
+        transform: "translateX(-50%)",
+      }}
+    >
       <img
         src="/paper.png"
         alt="parchment"
-        className="h-full object-cover rounded-[18px]"
+        className="h-full w-full object-cover rounded-[18px]"
         style={{
-          width: "auto",
-          transform: `scaleX(${PARCHMENT_SCALE_X}) scaleY(${PARCHMENT_SCALE_Y}) translateY(${PARCHMENT_SHIFT_Y}px)`,
-          transformOrigin: "center top",
           filter: "drop-shadow(0 12px 40px rgba(0,0,0,0.35))",
         }}
       />
@@ -204,109 +290,85 @@ function ParchmentBackground() {
   );
 }
 
-/** White card in Sessions view */
+/**======= Component4: Sessions 里的白卡片（保持不变） */
 function CardOnPaper() {
+  const PAPER_TOP = "30vh";
+  const PAPER_W = "60vw";
+
   return (
     <div
-      className="absolute z-[2]"
+      className="fixed z-[2]"
       style={{
-        // Card parameters
-        left: 300,
-        top: Math.max(0, 12 - CARD_PULLUP),
-        width: 560,
-        height: 520,
-        minHeight: 440,
+        top: `calc(${PAPER_TOP} -15px)`,
+        left: "50%",
+        transform: "translateX(-50%)",
+        width: `calc(${PAPER_W} * 0.8)`,
+        maxWidth: "980px",
+        minWidth: "420px",
       }}
     >
-      {/* White card base */}
-      <div className="absolute inset-0 bg-[#F5F5F5] border border-[#E9E9E9] rounded-[20px] shadow-lg" />
+      <div className="w-full bg-[#F5F5F5] border border-[#E9E9E9] rounded-[20px] shadow-lg relative p-6 md:p-8">
+        <div className="flex gap-4 md:gap-6">
+          <div
+            className="overflow-hidden rounded-[18px] border border-white/50 shadow shrink-0"
+            style={{ width: 180, height: 180, background: "#00000010" }}
+          >
+            <Image
+              src="/Griff.png"
+              alt="cover"
+              width={180}
+              height={180}
+              className="object-cover w-full h-full"
+              priority
+            />
+          </div>
 
-      {/* Cover image in top left */}
-      <div
-        className="absolute overflow-hidden rounded-[18px] border border-white/50 shadow"
-        style={{
-          left: 16,
-          top: 20,
-          width: 180,
-          height: 180,
-          background: "#00000010",
-          zIndex: 2,
-        }}
-      >
-        <Image
-          src="/Griff.png"
-          alt="cover"
-          fill
-          className="object-cover"
-          priority
-        />
-      </div>
-
-      {/* Title and date */}
-      <div
-        className="absolute text-black text-center"
-        style={{
-          left: 220,
-          right: 24,
-          top: 82,
-          fontFamily: '"Abhaya Libre ExtraBold", serif',
-          zIndex: 2,
-        }}
-      >
-        {/* Title */}
-        <div style={{ fontSize: 40, lineHeight: "44px", fontWeight: 800 }}>
-          Forest Adventure
+          <div className="flex-1 text-black text-center flex flex-col items-center justify-center px-2">
+            <div
+              style={{
+                fontFamily: '"Abhaya Libre ExtraBold", serif',
+                fontWeight: 800,
+                fontSize: "clamp(24px, 3vw, 40px)",
+                lineHeight: "1.2",
+              }}
+            >
+              Forest Adventure
+            </div>
+            <div
+              style={{
+                marginTop: 12,
+                fontSize: 18,
+                color: "#A43718",
+                fontFamily: "Adamina, serif",
+              }}
+            >
+              10th/Aug 2025
+            </div>
+          </div>
         </div>
-        {/* Date */}
-        <div
-          style={{
-            marginTop: 12,
-            fontSize: 18,
-            color: "#A43718",
-            fontFamily: "Adamina, serif",
-          }}
-        >
-          10th/Aug 2025
-        </div>
-      </div>
 
-      {/* Summary diagram */}
-      <div
-        className="absolute left-24 right-24"
-        style={{ top: 260, bottom: 24, zIndex: 1 }}
-      >
-        <div className="relative w-full h-full">
-          <Image
-            src="/summary.png"
-            alt="main"
-            fill
-            className="object-contain"
-            priority
-          />
+        <div className="mt-6">
+          <div className="relative w-full" style={{ minHeight: 260 }}>
+            <Image
+              src="/summary.png"
+              alt="main"
+              fill
+              className="object-contain"
+              priority
+            />
+          </div>
         </div>
-      </div>
-
-      {/* Back arrow */}
-      <div
-        className="absolute text-black/40"
-        style={{
-          left: 18,
-          top: 18,
-          fontSize: 28,
-          lineHeight: "28px",
-          zIndex: 3,
-        }}
-        aria-hidden
-        title="Back"
-      >
-        ‹
       </div>
     </div>
   );
 }
 
-/********* Characters carousel **********/
-function CharacterCarouselStacked() {
+/********* ===== Components 5: 角色轮播（3 张位，支持 N>=3 环绕；含搜索命中动画） **********/
+function CharacterCarouselStacked({
+  searchName = "",
+}: {
+  searchName?: string;
+}) {
   const items = [
     {
       name: "Griff",
@@ -326,29 +388,56 @@ function CharacterCarouselStacked() {
       details:
         "Human warlock with a cryptic pact. Proficiencies: eldritch arts, arcana, deception.",
     },
+    {
+      name: "Lyra",
+      img: "/Griff.png",
+      details:
+        "Half-elf bard with a silver tongue. Proficiencies: performance, persuasion, rapier.",
+    },
   ];
 
-  const [cur, setCur] = useState(0); // Center card
-  const [flippedIndex, setFlippedIndex] = useState<number | null>(null); // Flipped card
-  const N = items.length; // Total number of cards
+  const [cur, setCur] = useState(0);
+  const [flippedIndex, setFlippedIndex] = useState<number | null>(null);
+
+  // 命中提示动画（轻微缩放 + 发光框）
+  const [hintOn, setHintOn] = useState(false);
+  const fireHint = () => {
+    setHintOn(true);
+    window.setTimeout(() => setHintOn(false), 900);
+  };
+
+  const N = items.length;
   if (N === 0) return null;
-  // Compute indices
-  const idxL = (cur - 1 + N) % N;
-  const idxR = (cur + 1) % N;
-  // Switch images
+
+  const mod = (i: number, m: number) => ((i % m) + m) % m;
+  const idxL = N >= 2 ? mod(cur - 1, N) : cur;
+  const idxR = N >= 3 ? mod(cur + 1, N) : N === 2 ? mod(cur + 1, N) : cur;
+
   const prev = () => {
-    setCur((v) => (v - 1 + N) % N);
+    setCur((v) => mod(v - 1, N));
     setFlippedIndex(null);
   };
   const next = () => {
-    setCur((v) => (v + 1) % N);
+    setCur((v) => mod(v + 1, N));
     setFlippedIndex(null);
   };
   const goTo = (i: number) => {
-    setCur(i);
+    setCur(mod(i, N));
     setFlippedIndex(null);
-  }; // Jump when clicking indicator
-  // Define single card
+  };
+
+  // 根据搜索词把对应角色切到中间并触发 hint 动画（全名优先，包含匹配兜底）
+  useEffect(() => {
+    const key = searchName.trim().toLowerCase();
+    if (!key) return;
+    let i = items.findIndex((x) => x.name.toLowerCase() === key);
+    if (i < 0) i = items.findIndex((x) => x.name.toLowerCase().includes(key));
+    if (i >= 0) {
+      goTo(i);
+      fireHint();
+    }
+  }, [searchName]); // 参考对照文件的写法
+
   function Card({
     data,
     type,
@@ -360,6 +449,7 @@ function CharacterCarouselStacked() {
   }) {
     const styleByType: Record<typeof type, React.CSSProperties> = {
       left: {
+        position: "absolute",
         left: 0,
         top: 14,
         width: 399,
@@ -368,6 +458,7 @@ function CharacterCarouselStacked() {
         opacity: 0.9,
       },
       right: {
+        position: "absolute",
         left: 331,
         top: 14,
         width: 399,
@@ -376,6 +467,7 @@ function CharacterCarouselStacked() {
         opacity: 0.9,
       },
       center: {
+        position: "absolute",
         left: 118,
         top: -26,
         width: 486,
@@ -390,11 +482,29 @@ function CharacterCarouselStacked() {
     const isFlipped = isCenter && flippedIndex === index;
 
     return (
-      <div className="absolute" style={s}>
-        <div className="h-full w-full [perspective:1200px] rounded-[20px]">
+      <div style={s}>
+        {/* 中间卡片命中提示：描边+发光 */}
+        {isCenter && hintOn && (
+          <div
+            className="pointer-events-none absolute -inset-3 rounded-[26px]"
+            style={{
+              border: "4px solid #A43718",
+              filter: "drop-shadow(0 0 14px rgba(164,55,24,0.6))",
+              opacity: 0.9,
+              borderRadius: 26,
+            }}
+          />
+        )}
+
+        <div
+          className="h-full w-full [perspective:1200px] rounded-[20px]"
+          style={{
+            transform: isCenter && hintOn ? "scale(1.03)" : undefined,
+            transition: "transform 420ms ease-out",
+          }}
+        >
           <div
             className="relative h-full w-full rounded-[20px] transition-transform duration-500 [transform-style:preserve-3d] shadow-[0_22px_74px_rgba(0,0,0,0.6)]"
-            // Flip effect
             style={{
               transform: isFlipped ? "rotateY(180deg)" : "rotateY(0deg)",
             }}
@@ -404,7 +514,6 @@ function CharacterCarouselStacked() {
               className="absolute inset-0 rounded-[20px] border border-[#E9E9E9] [backface-visibility:hidden] overflow-hidden"
               style={{ background: isCenter ? "#F5F5F5" : "#FFFFFF" }}
             >
-              {/* Image */}
               <div
                 className="absolute"
                 style={{
@@ -420,7 +529,6 @@ function CharacterCarouselStacked() {
                   className="h-full w-full object-cover rounded-[20px] border border-[#E9E9E9]"
                 />
               </div>
-              {/* Title */}
               <div
                 className="absolute"
                 style={{ left: "4.26%", right: "35%", top: "77.5%" }}
@@ -437,7 +545,6 @@ function CharacterCarouselStacked() {
                   {data.name}
                 </div>
               </div>
-              {/* View Details */}
               <div
                 className="absolute"
                 style={{ left: "4.26%", right: "50.13%", top: "87.38%" }}
@@ -458,7 +565,6 @@ function CharacterCarouselStacked() {
               style={{ transform: "rotateY(180deg)" }}
               onClick={() => isCenter && setFlippedIndex(null)}
             >
-              {/* Character name */}
               <div
                 className="text-[#1D1D1D]"
                 style={{
@@ -469,7 +575,6 @@ function CharacterCarouselStacked() {
               >
                 {data.name}
               </div>
-              {/* Character details */}
               <div
                 className="text-[#333]"
                 style={{
@@ -480,7 +585,6 @@ function CharacterCarouselStacked() {
               >
                 {data.details}
               </div>
-              {/* Back button */}
               <div className="mt-auto flex justify-end">
                 <button
                   className="px-4 py-2 rounded-md bg-[#3D2304] text-white hover:opacity-95 active:scale-95 transition cursor-pointer"
@@ -498,95 +602,90 @@ function CharacterCarouselStacked() {
       </div>
     );
   }
-  // Control all cards, switch buttons, and indicators
+
   return (
     <div
       className="relative"
       style={{ width: 730, height: 438, left: 0, top: -70, zIndex: 30 }}
     >
-      {/* Previous */}
-      <button
-        onClick={prev} // Listen for event
-        aria-label="Previous"
-        className="absolute h-[50px] w-[50px] rounded-full grid place-items-center transition
-                   hover:scale-105 active:scale-95 cursor-pointer"
-        style={{
-          left: -18,
-          top: 150,
-          zIndex: 45,
-          background: "rgba(0,0,0,0.85)",
-          boxShadow:
-            "0 10px 24px rgba(0,0,0,0.45), 0 0 0 2px rgba(255,255,255,0.25) inset",
-        }}
-      >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-          <path
-            d="M15 6l-6 6 6 6"
-            stroke="white"
-            strokeWidth="2.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      </button>
+      {/* Prev */}
+      {N > 1 && (
+        <button
+          onClick={prev}
+          aria-label="Previous"
+          className="absolute h-[50px] w-[50px] rounded-full grid place-items-center transition hover:scale-105 active:scale-95 cursor-pointer"
+          style={{
+            left: -18,
+            top: 150,
+            zIndex: 45,
+            background: "rgba(0,0,0,0.85)",
+            boxShadow:
+              "0 10px 24px rgba(0,0,0,0.45), 0 0 0 2px rgba(255,255,255,0.25) inset",
+          }}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+            <path
+              d="M15 6l-6 6 6 6"
+              stroke="white"
+              strokeWidth="2.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+      )}
 
       {/* Next */}
-      <button
-        onClick={next} // Listen for event
-        aria-label="Next"
-        className="absolute h-[50px] w-[50px] rounded-full grid place-items-center transition
-                   hover:scale-105 active:scale-95 cursor-pointer"
-        style={{
-          right: -18,
-          top: 150,
-          zIndex: 45,
-          background: "rgba(0,0,0,0.85)",
-          boxShadow:
-            "0 10px 24px rgba(0,0,0,0.45), 0 0 0 2px rgba(255,255,255,0.25) inset",
-        }}
-      >
-        <svg
-          width="18"
-          height="18"
-          viewBox="0 0 24 24"
-          fill="none"
-          style={{ transform: "rotate(180deg)" }}
+      {N > 1 && (
+        <button
+          onClick={next}
+          aria-label="Next"
+          className="absolute h-[50px] w-[50px] rounded-full grid place-items-center transition hover:scale-105 active:scale-95 cursor-pointer"
+          style={{
+            left: 698, // 用固定 left 值
+            top: 150,
+            zIndex: 45,
+            background: "rgba(0,0,0,0.85)",
+            boxShadow:
+              "0 10px 24px rgba(0,0,0,0.45), 0 0 0 2px rgba(255,255,255,0.25) inset",
+          }}
         >
-          <path
-            d="M15 6l-6 6 6 6"
-            stroke="white"
-            strokeWidth="2.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      </button>
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            style={{ transform: "rotate(180deg)" }}
+          >
+            <path
+              d="M15 6l-6 6 6 6"
+              stroke="white"
+              strokeWidth="2.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+      )}
 
-      {/* Three stacked cards */}
-      <Card data={items[idxL]} type="left" index={idxL} />
-      <Card data={items[cur]} type="center" index={cur} />
-      <Card data={items[idxR]} type="right" index={idxR} />
+      {/* 三张位 */}
+      <div className="relative" style={{ height: 438 }}>
+        <Card data={items[idxL]} type="left" index={idxL} />
+        <Card data={items[cur]} type="center" index={cur} />
+        <Card data={items[idxR]} type="right" index={idxR} />
+      </div>
 
-      {/* Indicator dots, like indexes, click to jump */}
+      {/* 指示点：数量 = N */}
       <div
         className="absolute flex gap-2"
-        style={{
-          left: "50%",
-          transform: "translateX(-50%)",
-          top: 388,
-          zIndex: 40,
-        }}
+        style={{ left: 340, top: 388, zIndex: 40 }}
       >
         {items.map((_, i) => (
           <button
             key={i}
-            aria-label={`Go to slide ${i + 1}`}
-            onClick={() => goTo(i)} // Listen for event
+            onClick={() => goTo(i)}
             className="h-[10px] w-[10px] rounded-full cursor-pointer"
-            style={{
-              background: i === cur ? "#0056D6" : "#D3E5FF",
-              outline: "none",
-            }}
+            style={{ background: i === cur ? "#0056D6" : "#D3E5FF" }}
           />
         ))}
       </div>
