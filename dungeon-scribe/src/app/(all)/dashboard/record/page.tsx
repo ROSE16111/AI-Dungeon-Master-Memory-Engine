@@ -1,7 +1,15 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  forwardRef,
+  useImperativeHandle,
+} from "react";
+import { useRouter, useParams } from "next/navigation";
 import { useTranscript } from "../../../context/TranscriptContext";
+type CharItem = { name: string; img: string; details: string };
 
 // lock <body>
 function useLockBodyScroll() {
@@ -15,15 +23,34 @@ function useLockBodyScroll() {
 }
 
 // search and map
-function SearchMapsBar() {
-  const [q, setQ] = useState("");
+// search and map —— 受控版：由父组件传入 q / setQ / onSearch
+// Search + Map + (Prev/Next for Sessions) — controlled by parent
+function SearchMapsBar({
+  q,
+  setQ,
+  onSearch,
+  showPrevNext,
+  hitInfo,
+  onPrev,
+  onNext,
+}: {
+  q: string;
+  setQ: (v: string) => void;
+  onSearch: () => void;
+  showPrevNext?: boolean;
+  hitInfo?: string;
+  onPrev?: () => void;
+  onNext?: () => void;
+}) {
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    onSearch();
   };
   const onMap = () => {};
 
   return (
     <>
+      {/* Search box */}
       <form
         onSubmit={onSubmit}
         className="absolute"
@@ -42,6 +69,16 @@ function SearchMapsBar() {
             fontWeight: 700,
             fontSize: 16,
           }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              if (showPrevNext && (onPrev || onNext)) {
+                e.preventDefault();
+                if (e.shiftKey && onPrev) onPrev();
+                else if (onNext) onNext();
+              }
+            }
+          }}
+          title="Enter: next hit; Shift+Enter: previous"
         />
         <button
           type="submit"
@@ -62,6 +99,31 @@ function SearchMapsBar() {
         </button>
       </form>
 
+      {/* Prev / Next (only when there are hits) */}
+      {showPrevNext && (
+        <div
+          className="absolute flex items-center gap-2 text-white"
+          style={{ left: 1096, top: 74, zIndex: 50 }}
+        >
+          <button
+            onClick={onPrev}
+            className="px-3 py-1 rounded-md bg-white/15 hover:bg-white/25 active:scale-95 transition cursor-pointer"
+            title="previous (Shift+Enter)"
+          >
+            previous
+          </button>
+          <button
+            onClick={onNext}
+            className="px-3 py-1 rounded-md bg-white/15 hover:bg-white/25 active:scale-95 transition cursor-pointer"
+            title="next (Enter)"
+          >
+            next
+          </button>
+          <span className="text-sm opacity-90">{hitInfo}</span>
+        </div>
+      )}
+
+      {/* Map button */}
       <div
         className="absolute flex flex-col items-center select-none"
         style={{ left: 1377, top: 28, width: 38, height: 42, zIndex: 45 }}
@@ -196,42 +258,42 @@ function MenuItem({
   );
 }
 
-// right part
-function CharacterCarouselStacked() {
-  const items = [
-    {
-      name: "Griff",
-      img: "/Griff.png",
-      details:
-        "Veteran battle master of the north. Proficiencies: longsword, tactics, leadership.",
-    },
-    {
-      name: "Arwyn",
-      img: "/Griff.png",
-      details:
-        "Elven ranger from the silver woods. Proficiencies: bow, tracking, nature magic.",
-    },
-    {
-      name: "Dorian",
-      img: "/Griff.png",
-      details:
-        "Human warlock with a cryptic pact. Proficiencies: eldritch arts, arcana, deception.",
-    },
-  ];
-
-  const [cur, setCur] = useState(0);
+/*********** Character carousel (stacked, new style) ***********/
+const CharacterCarouselStacked = forwardRef(function CharacterCarouselStacked(
+  {
+    items,
+    cur,
+    setCur,
+    searchName,
+  }: {
+    items: CharItem[];
+    cur: number;
+    setCur: (i: number) => void;
+    searchName: string;
+  },
+  _ref: React.Ref<{ focusByName: (name: string) => void }>
+) {
   const [flippedIndex, setFlippedIndex] = useState<number | null>(null);
+
+  // hint animation when focused by search
+  const [hintOn, setHintOn] = useState(false);
+  const fireHint = () => {
+    setHintOn(true);
+    window.setTimeout(() => setHintOn(false), 900);
+  };
+
   const N = items.length;
   if (N === 0) return null;
 
   const idxL = (cur - 1 + N) % N;
   const idxR = (cur + 1) % N;
+
   const prev = () => {
-    setCur((v) => (v - 1 + N) % N);
+    setCur((cur - 1 + N) % N);
     setFlippedIndex(null);
   };
   const next = () => {
-    setCur((v) => (v + 1) % N);
+    setCur((cur + 1) % N);
     setFlippedIndex(null);
   };
   const goTo = (i: number) => {
@@ -239,13 +301,41 @@ function CharacterCarouselStacked() {
     setFlippedIndex(null);
   };
 
-  // card
+  // expose imperative API (optional to use)
+  useImperativeHandle(
+    _ref,
+    () => ({
+      focusByName: (name: string) => {
+        const i = items.findIndex(
+          (x) => x.name.toLowerCase() === name.toLowerCase()
+        );
+        if (i >= 0) {
+          goTo(i);
+          fireHint();
+        }
+      },
+    }),
+    [items, cur]
+  );
+
+  // react to search keyword
+  useEffect(() => {
+    const key = searchName?.trim().toLowerCase();
+    if (!key) return;
+    let i = items.findIndex((x) => x.name.toLowerCase() === key);
+    if (i < 0) i = items.findIndex((x) => x.name.toLowerCase().includes(key));
+    if (i >= 0) {
+      goTo(i);
+      fireHint();
+    }
+  }, [searchName]); // eslint-disable-line
+
   function Card({
     data,
     type,
     index,
   }: {
-    data: { name: string; img: string; details: string };
+    data: CharItem;
     type: "left" | "center" | "right";
     index: number;
   }) {
@@ -276,12 +366,31 @@ function CharacterCarouselStacked() {
       },
     };
     const s = styleByType[type];
-
     const isCenter = type === "center";
     const isFlipped = isCenter && flippedIndex === index;
 
     return (
-      <div className="absolute" style={s}>
+      <div
+        className="absolute"
+        style={{
+          ...s,
+          transform: isCenter && hintOn ? "scale(1.03)" : undefined,
+          transition: "transform 420ms ease-out",
+        }}
+      >
+        {/* 可选发光边框，不影响点击 */}
+        {isCenter && hintOn && (
+          <div
+            className="pointer-events-none absolute -inset-3 rounded-[26px]"
+            style={{
+              border: "4px solid #A43718",
+              filter: "drop-shadow(0 0 14px rgba(164,55,24,0.6))",
+              borderRadius: 26,
+              opacity: 0.9,
+            }}
+          />
+        )}
+
         <div className="h-full w-full [perspective:1200px] rounded-[20px]">
           <div
             className="relative h-full w-full rounded-[20px] transition-transform duration-500 [transform-style:preserve-3d] shadow-[0_22px_74px_rgba(0,0,0,0.6)]"
@@ -289,6 +398,7 @@ function CharacterCarouselStacked() {
               transform: isFlipped ? "rotateY(180deg)" : "rotateY(0deg)",
             }}
           >
+            {/* Front */}
             <div
               className="absolute inset-0 rounded-[20px] border border-[#E9E9E9] [backface-visibility:hidden] overflow-hidden"
               style={{ background: isCenter ? "#F5F5F5" : "#FFFFFF" }}
@@ -338,6 +448,7 @@ function CharacterCarouselStacked() {
               </div>
             </div>
 
+            {/* Back */}
             <div
               className="absolute inset-0 rounded-[20px] border border-[#E9E9E9] bg-white px-6 py-5 flex flex-col gap-3 [backface-visibility:hidden]"
               style={{ transform: "rotateY(180deg)" }}
@@ -381,18 +492,16 @@ function CharacterCarouselStacked() {
     );
   }
 
-  // 轮播整体容器：位置/尺寸位于羊皮纸中央；zIndex=30，确保最高可点
   return (
     <div
       className="relative"
       style={{ width: 730, height: 438, left: 40, top: -36, zIndex: 30 }}
     >
-      {/* last page */}
+      {/* prev */}
       <button
         onClick={prev}
         aria-label="Previous"
-        className="absolute h-[50px] w-[50px] rounded-full grid place-items-center transition
-                   hover:scale-105 active:scale-95 cursor-pointer"
+        className="absolute h-[50px] w-[50px] rounded-full grid place-items-center transition hover:scale-105 active:scale-95 cursor-pointer"
         style={{
           left: -18,
           top: 150,
@@ -413,12 +522,11 @@ function CharacterCarouselStacked() {
         </svg>
       </button>
 
-      {/* next page */}
+      {/* next */}
       <button
         onClick={next}
         aria-label="Next"
-        className="absolute h-[50px] w-[50px] rounded-full grid place-items-center transition
-                   hover:scale-105 active:scale-95 cursor-pointer"
+        className="absolute h-[50px] w-[50px] rounded-full grid place-items-center transition hover:scale-105 active:scale-95 cursor-pointer"
         style={{
           left: 698,
           top: 150,
@@ -445,12 +553,12 @@ function CharacterCarouselStacked() {
         </svg>
       </button>
 
-      {/* 三张叠放卡片 */}
+      {/* 3 cards */}
       <Card data={items[idxL]} type="left" index={idxL} />
       <Card data={items[cur]} type="center" index={cur} />
       <Card data={items[idxR]} type="right" index={idxR} />
 
-      {/* 指示点（数量随 items.length 自动变化） */}
+      {/* dots */}
       <div
         className="absolute flex gap-2"
         style={{ left: 340, top: 388, zIndex: 40 }}
@@ -470,10 +578,18 @@ function CharacterCarouselStacked() {
       </div>
     </div>
   );
-}
+});
 
 /* 仅 Sessions 视图使用：羊皮纸“内部”的滚动内容（字幕从纸内出现而不是从网页底部出现）  可连接LLM接口*/
-function SessionsInsidePaper() {
+function SessionsInsidePaper({
+  searchTerm,
+  activeHit,
+  onHitCount,
+}: {
+  searchTerm: string;
+  activeHit: number;
+  onHitCount: (n: number) => void;
+}) {
   const { summary } = useTranscript();
 
   const raw =
@@ -523,6 +639,89 @@ Exhausted but triumphant, the party returned to the brewery for the promised pay
         body: lines.slice(1).join("\n").trim(),
       };
     });
+
+  // === search: count hits, highlight, and jump to active hit ===
+  const hitRefs = useRef<Array<HTMLSpanElement | null>>([]);
+  hitRefs.current = []; // rebuild on each render
+
+  const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  // 根据 activeHit 定位到对应命中（滚动到视窗中央）
+  // 当搜索词变化后：下一帧统计并滚到第一个命中
+  useEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp) {
+      onHitCount(0);
+      return;
+    }
+    requestAnimationFrame(() => {
+      const hits = vp.querySelectorAll<HTMLElement>("mark.search-hit");
+      onHitCount(hits.length);
+      if (searchTerm && hits.length > 0) {
+        const el = hits[0]!;
+        const offset =
+          el.getBoundingClientRect().top - vp.getBoundingClientRect().top;
+        vp.scrollBy({ top: offset - 40, behavior: "smooth" });
+      }
+    });
+  }, [searchTerm]);
+
+  // 当 activeHit 或 searchTerm 变化：切换“当前命中”样式并滚动定位
+  useEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+
+    const hits = vp.querySelectorAll<HTMLElement>("mark.search-hit");
+    hits.forEach((h) => h.classList.remove("search-hit--active"));
+    if (!hits.length) return;
+
+    const idx = Math.max(0, Math.min(activeHit, hits.length - 1));
+    const el = hits[idx]!;
+    el.classList.add("search-hit--active");
+
+    const vpRect = vp.getBoundingClientRect();
+    const elRect = el.getBoundingClientRect();
+    const top = elRect.top - vpRect.top;
+    if (top < 60 || top > vp.clientHeight - 80) {
+      vp.scrollBy({
+        top: top - vp.clientHeight / 2 + elRect.height / 2,
+        behavior: "smooth",
+      });
+    }
+  }, [activeHit, searchTerm]);
+
+  // 渲染时把命中包一层 <mark>
+  // 替换 renderHighlighted，给每个命中标 <mark className="search-hit" data-hit={序号}>
+  function renderHighlighted(text: string) {
+    if (!searchTerm?.trim()) return text;
+    const re = new RegExp(escapeRegExp(searchTerm), "gi");
+    const nodes: React.ReactNode[] = [];
+    let last = 0,
+      idx = 0,
+      m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      const start = m.index,
+        end = start + m[0].length;
+      if (start > last) nodes.push(text.slice(last, start));
+      nodes.push(
+        <mark
+          key={`hit-${idx}`}
+          className="search-hit"
+          data-hit={idx++}
+          style={{
+            paddingInline: 2,
+            background: "rgba(255,230,0,0.6)",
+            borderRadius: 3,
+          }}
+        >
+          {text.slice(start, end)}
+        </mark>
+      );
+      last = end;
+    }
+    if (last < text.length) nodes.push(text.slice(last));
+    return nodes;
+  }
 
   // 纸内“安全区”：在原始可视区域基础上四周内缩，避免文字或滚动条压到破边
   const SAFE = { left: 22, right: 22, top: 1, bottom: 25 };
@@ -684,10 +883,14 @@ Exhausted but triumphant, the party returned to the brewery for the promised pay
                       ((e.target as HTMLImageElement).style.display = "none")
                     }
                   />
-                  <div className="font-extrabold">{blk.title}</div>
+                  <div className="font-extrabold">
+                    {renderHighlighted(blk.title)}
+                  </div>
                 </div>
                 {blk.body && (
-                  <div className="whitespace-pre-wrap mt-1">{blk.body}</div>
+                  <div className="whitespace-pre-wrap mt-1">
+                    {renderHighlighted(blk.body)}
+                  </div>
                 )}
               </div>
             ))}
@@ -737,6 +940,10 @@ Exhausted but triumphant, the party returned to the brewery for the promised pay
           width: 0;
           height: 0;
         }
+        mark.search-hit--active {
+          outline: 2px solid #a43718;
+          background: rgba(255, 230, 0, 0.9);
+        }
       `}</style>
     </>
   );
@@ -744,8 +951,45 @@ Exhausted but triumphant, the party returned to the brewery for the promised pay
 
 export default function RecordPage() {
   useLockBodyScroll();
-
   const { transcript, setTranscript } = useTranscript();
+  const router = useRouter();
+  const params = useParams();
+  const id = Array.isArray((params as any)?.id)
+    ? (params as any).id[0]
+    : (params as any)?.id;
+
+  // 先声明 view（避免“使用前声明”错误）
+  const [view, setView] = useState<"sessions" | "character">("sessions");
+
+  // 统一搜索 state（只保留这一份）
+  const [q, setQ] = useState("");
+  const [searchTerm, setSearchTerm] = useState("");
+  const [hitCount, setHitCount] = useState(0);
+  const [activeHit, setActiveHit] = useState(0);
+
+  // 切换视图时清空搜索与命中导航（保持与截图一致）
+  const onChangeView = (v: "sessions" | "character") => {
+    setView(v);
+    // 清空 Sessions 搜索相关
+    setQ("");
+    setSearchTerm("");
+    setHitCount(0);
+    setActiveHit(0);
+    // 清空 Character 关键字
+    setCharSearchKey("");
+  };
+
+  // 搜索提交 + 上/下一条
+  const onSearch = () => {
+    setSearchTerm(q.trim());
+    setActiveHit(0);
+  };
+  const onPrev = () => {
+    if (hitCount > 0) setActiveHit((i) => (i - 1 + hitCount) % hitCount);
+  };
+  const onNext = () => {
+    if (hitCount > 0) setActiveHit((i) => (i + 1) % hitCount);
+  };
 
   // recording state
 
@@ -847,7 +1091,7 @@ export default function RecordPage() {
       return process.env.NEXT_PUBLIC_ASR_WS!;
     }
     const proto = window.location.protocol === "https:" ? "wss" : "ws";
-    return `${proto}://${window.location.hostname}:5000/audio`;
+    return `${proto}://${window.location.hostname}:8000/audio`;
   }
 
   // START recording
@@ -903,7 +1147,7 @@ export default function RecordPage() {
             return process.env.NEXT_PUBLIC_ASR_WS!;
           }
           const proto = window.location.protocol === "https:" ? "wss" : "ws";
-          return `${proto}://${window.location.hostname}:5000/audio`;
+          return `${proto}://${window.location.hostname}:8000/audio`;
         })()
       );
       ws.binaryType = "arraybuffer";
@@ -1027,8 +1271,35 @@ export default function RecordPage() {
     }
   };
 
-  // right panel
-  const [view, setView] = useState<"sessions" | "character">("sessions");
+  // ======= Character carousel data/state (new style) ======= //
+  const charItems: CharItem[] = [
+    {
+      name: "Griff",
+      img: "/Griff.png",
+      details:
+        "Veteran battle master of the north. Proficiencies: longsword, tactics, leadership.",
+    },
+    {
+      name: "Arwyn",
+      img: "/Griff.png",
+      details:
+        "Elven ranger from the silver woods. Proficiencies: bow, tracking, nature magic.",
+    },
+    {
+      name: "Dorian",
+      img: "/Griff.png",
+      details:
+        "Human warlock with a cryptic pact. Proficiencies: eldritch arts, arcana, deception.",
+    },
+    {
+      name: "Lyra",
+      img: "/Griff.png",
+      details:
+        "Half-elf bard with a silver tongue. Proficiencies: performance, persuasion, support magic.",
+    },
+  ];
+  const [charCur, setCharCur] = useState(0);
+  const [charSearchKey, setCharSearchKey] = useState("");
 
   return (
     <div className="fixed inset-0 overflow-hidden">
@@ -1036,7 +1307,15 @@ export default function RecordPage() {
         className="relative mx-auto"
         style={{ width: 1440, height: `calc(100vh - 125px - 18px)`, top: 100 }}
       >
-        <SearchMapsBar />
+        <SearchMapsBar
+          q={q}
+          setQ={setQ}
+          onSearch={onSearch}
+          showPrevNext={view === "sessions" && hitCount > 0}
+          hitInfo={hitCount > 0 ? `${activeHit + 1}/${hitCount}` : ""}
+          onPrev={onPrev}
+          onNext={onNext}
+        />
 
         <aside
           className="absolute"
@@ -1146,6 +1425,12 @@ export default function RecordPage() {
                   title="Drag to scroll"
                 />
               </div>
+              <button
+                onClick={() => router.push(`/campaigns/${id}/summary`)}
+                className="ml-45 mt-6 font-bold text-[#3D2304] underline hover:text-[#A43718] cursor-pointer"
+              >
+                Get Summary
+              </button>
             </div>
           </div>
         </aside>
@@ -1160,7 +1445,7 @@ export default function RecordPage() {
             height: `calc(100% - 27px - 18px)`,
           }}
         >
-          <TitleWithFilter value={view} onChange={setView} />
+          <TitleWithFilter value={view} onChange={onChangeView} />
 
           <div
             className="absolute"
@@ -1202,7 +1487,13 @@ export default function RecordPage() {
               }}
             >
               <div className="relative w-full h-full">
-                <SessionsInsidePaper />
+                <div className="relative w-full h-full">
+                  <SessionsInsidePaper
+                    searchTerm={searchTerm}
+                    activeHit={activeHit}
+                    onHitCount={setHitCount}
+                  />
+                </div>
               </div>
             </div>
           )}
@@ -1219,7 +1510,12 @@ export default function RecordPage() {
                 pointerEvents: "auto",
               }}
             >
-              <CharacterCarouselStacked />
+              <CharacterCarouselStacked
+                items={charItems}
+                cur={charCur}
+                setCur={setCharCur}
+                searchName={charSearchKey}
+              />
             </div>
           )}
         </section>
