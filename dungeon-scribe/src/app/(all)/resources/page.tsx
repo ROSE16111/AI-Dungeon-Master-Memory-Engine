@@ -322,7 +322,7 @@ function AddNewCard({
 export default function ResourcesPage() {
   useLockBodyScroll();
 
-  const [view, setView] = useState<Category>("Background"); // 默认显示 Background;view 保存当前标题筛选
+  const [view, setView] = useState<Category>("Map"); // 默认显示 map;view 保存当前标题筛选
   const [createOpen, setCreateOpen] = useState(false);
   const [createName, setCreateName] = useState(""); //绑定对话框里的输入框
 
