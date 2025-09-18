@@ -41,61 +41,52 @@ type AnalyzeBody = {
  * ```
  */
 export async function POST(req: Request) {
+  console.time("analyze");
   try {
-    // Parse request body as AnalyzeBody
     const body = (await req.json()) as AnalyzeBody;
+    console.timeLog("analyze", "parsed body");
 
-    // Get transcript text and ensure it's not empty
     const text = (body.text ?? "").trim();
-    if (!text) {
-      return NextResponse.json({ error: "Empty text" }, { status: 400 });
-    }
+    if (!text) return NextResponse.json({ error: "Empty text" }, { status: 400 });
 
-    // Use provided title or fallback to default
     const campaignTitle = (body.title || "Untitled Campaign").trim();
 
-    // Look up existing campaign by title, or create if not found
     let campaign = await prisma.campaign.findFirst({ where: { title: campaignTitle } });
     if (!campaign) {
       campaign = await prisma.campaign.create({ data: { title: campaignTitle } });
     }
+    console.timeLog("analyze", "campaign ready");
 
-    // Store the raw transcript in the database
     const allTxt = await prisma.allTxt.create({
-      data: {
-        content: text,
-        campaignId: campaign.id,
-      },
+      data: { content: text, campaignId: campaign.id },
     });
+    console.timeLog("analyze", "allTxt saved");
 
-    // Generate summary bullets using the LLM
+    console.time("analyze:llm");
     const summaryBullets = (await summarizeDnDSession(text)).trim();
+    console.timeEnd("analyze:llm");
 
-    // Fallback summary if LLM produced nothing
     const content =
       summaryBullets ||
       "• Summary unavailable. (LLM produced no output)\n• Check Ollama host/model configuration.";
 
-    // Save summary to database
     const summary = await prisma.summary.create({
-      data: {
-        type: SummaryType.session,
-        content,  
-        campaignId: campaign.id,
-      },
+      data: { type: SummaryType.session, content, campaignId: campaign.id },
     });
+    console.timeLog("analyze", "summary saved");
 
-    // Return JSON response with references to stored objects
-    return NextResponse.json({
+    const payload = {
       campaignId: campaign.id,
       allTxtId: allTxt.id,
       summaryId: summary.id,
       title: campaignTitle,
       source: body.source || "live",
       summary: content,
-    });
+    };
+    console.timeEnd("analyze");
+    return NextResponse.json(payload);
   } catch (err: any) {
-    // Log and return generic error on failure
+    console.timeEnd("analyze");
     console.error("POST /api/analyse error:", err?.message || err);
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
   }

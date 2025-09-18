@@ -1,16 +1,27 @@
 // src/app/api/upload/route.ts
 import { NextRequest, NextResponse } from "next/server";
 
-// export const runtime = "nodejs";
+export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+const ANALYZE_TIMEOUT_MS=210000 
+const TRANSCRIBE_TIMEOUT_MS = Number(process.env.TRANSCRIBE_TIMEOUT_MS ?? 60_000);
+
+// small helper for fetch timeouts
+async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, ms = 15000) {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), ms);
+  try {
+    return await fetch(input, { ...init, signal: ac.signal });
+  } finally {
+    clearTimeout(t);
+  }
+}
 
 export async function POST(req: NextRequest) {
   try {
     const form = await req.formData();
     const file = form.get("file") as File | null;
-    if (!file) {
-      return NextResponse.json({ error: "no file" }, { status: 400 });
-    }
+    if (!file) return NextResponse.json({ error: "no file" }, { status: 400 });
 
     const arrayBuf = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuf);
@@ -18,82 +29,74 @@ export async function POST(req: NextRequest) {
 
     let text = "";
 
-    // ========= 文本类 =========
+    // derive same-origin base URL (handles any dev port)
+    const origin = req.nextUrl?.origin ?? new URL(req.url).origin;
+
+    // ========= text family =========
     if (name.endsWith(".txt")) {
       text = buffer.toString("utf8");
+
     } else if (name.endsWith(".docx")) {
       const mammoth = await import("mammoth");
       const { value } = await mammoth.extractRawText({ buffer });
       text = value || "";
+
     } else if (name.endsWith(".pdf")) {
       const pdfParse = (await import("pdf-parse")).default;
       const out = await pdfParse(buffer);
       text = out.text || "";
 
-      // ========= 音频类 (mp3, wav, m4a, aac) =========
+      // ========= audio family =========
     } else if (
       name.endsWith(".mp3") ||
       name.endsWith(".wav") ||
       name.endsWith(".m4a") ||
       name.endsWith(".aac")
     ) {
-      // 转发到 /api/transcribe
-      const baseUrl =
-        process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
-
-      const resp = await fetch(`${baseUrl}/api/transcribe`, {
+      // forward file to /api/transcribe on same origin
+      const resp = await fetchWithTimeout(new URL("/api/transcribe", origin), {
         method: "POST",
-        body: form, // 原始 FormData 直接转发
-      });
+        body: form,
+      }, TRANSCRIBE_TIMEOUT_MS);
 
       if (!resp.ok) {
-        return NextResponse.json(
-          { error: "transcribe failed" },
-          { status: 500 }
-        );
+        return NextResponse.json({ error: "transcribe failed" }, { status: 500 });
       }
-
       const data = await resp.json();
       text = data.text || "";
 
-      // ========= 不支持的类型 =========
     } else {
-      return NextResponse.json(
-        { error: "unsupported file type" },
-        { status: 415 }
-      );
+      return NextResponse.json({ error: "unsupported file type" }, { status: 415 });
     }
 
-    // ========= 自动调用 /api/analyze =========
+    // ========= call analyze (same origin) =========
     if (text.trim()) {
-      const baseUrl =
-        process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
-
-      const analyzeRes = await fetch(`${baseUrl}/api/analyze`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text,
-          source: "upload",
-          title: file.name || "Untitled Upload",
-        }),
-      });
+    const analyzeRes = await fetchWithTimeout(new URL("/api/analyze", origin), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text,
+        source: "upload",
+        title: file.name || "Untitled Upload",
+      }),
+    }, ANALYZE_TIMEOUT_MS);
 
       if (!analyzeRes.ok) {
         return NextResponse.json({ error: "analyze failed" }, { status: 500 });
       }
 
       const analyzeData = await analyzeRes.json();
-
       return NextResponse.json({ ...analyzeData, text });
     }
 
     return NextResponse.json({ error: "no text extracted" }, { status: 400 });
   } catch (e: any) {
+    // timeouts & aborts surface here as generic errors
     console.error("UPLOAD_ERROR", e);
-    return NextResponse.json(
-      { error: e?.message ?? "upload failed" },
-      { status: 500 }
-    );
+    const msg =
+      e?.name === "AbortError"
+        ? "upstream timeout"
+        : e?.message ?? "upload failed";
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

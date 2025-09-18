@@ -1,57 +1,28 @@
-@baseUrl = http://localhost:3000
-@campaign = cmp1
-@ctype = application/json
+@base = http://localhost:3007
 
-### Inventory — alias “Thal”
-POST {{baseUrl}}/api/chat-turn
-Content-Type: {{ctype}}
+### Analyze: minimal happy-path
+POST {{base}}/api/analyze
+Accept: application/json
+Content-Type: application/json
+
+{ "title": "Test", "text": "hello", "source": "upload" }
+
+### Analyze: small sanity check (should succeed quickly)
+POST {{base}}/api/analyze
+Accept: application/json
+Content-Type: application/json
 
 {
-    "campaignId": "{{campaign}}",
-    "text": "What items does Thal have?"
+  "title": "Session 1",
+  "text": "hello",
+  "source": "upload"
 }
 
-### Stats — Elaria’s INT
-POST {{baseUrl}}/api/chat-turn
-Content-Type: {{ctype}}
+### Analyze: empty text (should return 400)
+POST {{base}}/api/analyze
+Accept: application/json
+Content-Type: application/json
 
 {
-    "campaignId": "{{campaign}}",
-    "text": "What is Elaria's intelligence?"
-}
-
-### Location events — Vine-Covered Ruins
-POST {{baseUrl}}/api/chat-turn
-Content-Type: {{ctype}}
-
-{
-    "campaignId": "{{campaign}}",
-    "text": "What did the party do in Vine-Covered Ruins?"
-}
-
-### Session summary — session 1
-POST {{baseUrl}}/api/chat-turn
-Content-Type: {{ctype}}
-
-{
-    "campaignId": "{{campaign}}",
-    "text": "Summarize session 1"
-}
-
-### Session summary — last session
-POST {{baseUrl}}/api/chat-turn
-Content-Type: {{ctype}}
-
-{
-    "campaignId": "{{campaign}}",
-    "text": "Recap last session"
-}
-
-### (Optional) Needs clarification example — unknown name
-POST {{baseUrl}}/api/chat-turn
-Content-Type: {{ctype}}
-
-{
-    "campaignId": "{{campaign}}",
-    "text": "What items does Boblin have?"
+  "text": "   "
 }

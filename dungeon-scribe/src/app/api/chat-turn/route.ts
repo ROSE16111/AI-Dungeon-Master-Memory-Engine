@@ -1,26 +1,29 @@
-import { NextRequest } from 'next/server';
-import { z } from 'zod';
+// app/api/chat-turn/route.ts
+import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { runChatTurn } from '../../../lib/chat/orchestrator';
+import { runOrchestrator } from "@/lib/chat/orchestrator";
+import { composeAnswer } from "@/lib/chat/composer";
 
-export const runtime = 'nodejs';
+export const runtime = "nodejs";
 
-const BodySchema = z.object({
-    campaignId: z.string().min(1),
-    text: z.string().min(1),
-});
-
-export async function POST(req: NextRequest) {
+export async function POST(req: Request) {
     try {
-        const body = await req.json();
-        const { campaignId, text } = BodySchema.parse(body);
-        const result = await runChatTurn(prisma, { campaignId, text });
-        return Response.json({ ok: true, result });
-    } catch (err) {
-        const message = err instanceof Error ? err.message : 'Invalid request';
-        return new Response(JSON.stringify({ ok: false, error: message }), {
-        status: 400,
-        headers: { 'content-type': 'application/json' },
+        const { campaignId, text } = await req.json();
+        if (!campaignId || !text) {
+        return NextResponse.json({ ok: false, error: "campaignId and text required" }, { status: 400 });
+        }
+
+        const result = await runOrchestrator({ prisma, campaignId, text });
+        const { text: reply } = composeAnswer(result);
+
+        return NextResponse.json({
+        ok: true,
+        kind: result.kind,
+        text: reply,
+        result, // keep the structured payload for rich UI if you want
         });
+    } catch (e: any) {
+        console.error("chat-turn error:", e?.message || e);
+        return NextResponse.json({ ok: false, error: "Internal Server Error" }, { status: 500 });
     }
 }
