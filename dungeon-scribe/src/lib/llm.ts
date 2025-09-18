@@ -1,30 +1,26 @@
-import { Ollama } from "ollama";
+// lib/llm.ts
 
-const client = new Ollama({ host: process.env.OLLAMA_HOST });
-const model = process.env.OLLAMA_MODEL ?? "phi3:medium";
+// ── Env ────────────────────────────────────────────────────────────────────────
+const OLLAMA_URL   = process.env.OLLAMA_URL   || "http://127.0.0.1:11434";
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "phi3:medium";
 
-const LONG_THRESHOLD_WORDS = 1000;
-const CHUNK_TEXT = 700;
-const CHUNK_OVERLAP = 70;
+// Optional tuning via env:
+const LLM_CONCURRENCY = Number(process.env.LLM_CONCURRENCY ?? 3); // parallel chunks
+const LLM_NUM_CTX     = Number(process.env.LLM_NUM_CTX ?? 4096);
+const LLM_NUM_PREDICT = Number(process.env.LLM_NUM_PREDICT ?? 256);
 const TEMP = 0.1;
-const MERGE_BATCH = 6;
 
-/**
- * Splits a long transcript into overlapping chunks of text.
- *
- * @param text - Full transcript text to split.
- * @param size - Number of words per chunk (default: `CHUNK_WORDS`).
- * @param overlap - Number of overlapping words between chunks (default: `CHUNK_OVERLAP`).
- * @returns Array of chunk strings, each containing up to `size` words.
- */
-function splitIntoChunks(
-  text: string,
-  size = CHUNK_TEXT,
-  overlap = CHUNK_OVERLAP
-): string[] {
+// ── Chunking parameters ────────────────────────────────────────────────────────
+const LONG_THRESHOLD_WORDS = 1000;  // if transcript ≤ this, do single-pass
+const CHUNK_TEXT    = Number(process.env.CHUNK_TEXT ?? 700);
+const CHUNK_OVERLAP = 70;           // overlapping words between chunks
+const MERGE_BATCH   = 6;            // summaries per merge group
+
+// ── Utils ─────────────────────────────────────────────────────────────────────
+function splitIntoChunks(text: string, size = CHUNK_TEXT, overlap = CHUNK_OVERLAP): string[] {
   const words = text.trim().split(/\s+/);
   const chunks: string[] = [];
-  for (let i = 0; i < words.length; i += size - overlap) {
+  for (let i = 0; i < words.length; i += Math.max(1, size - overlap)) {
     const slice = words.slice(i, i + size);
     if (!slice.length) break;
     chunks.push(slice.join(" "));
@@ -33,37 +29,38 @@ function splitIntoChunks(
   return chunks;
 }
 
-/**
- * Calls the Ollama LLM with the given prompt and logs the duration.
- *
- * @param prompt - The prompt text to send to the model.
- * @param label - A label used for console timing and error logging.
- * @returns LLM response.
- * @throws Rethrows errors from Ollama client after logging.
- */
+function normalizeBullets(s: string): string {
+  return s
+    .split(/\r?\n/)
+    .map(l => l.trim())
+    .filter(Boolean)
+    .map(l => (l.startsWith("•") ? l : `• ${l}`))
+    .join("\n");
+}
 
-const OLLAMA_HOST = process.env.OLLAMA_HOST || "http://localhost:11434";
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "phi3:medium";
-
-/**
- * Calls the Ollama REST API with a given prompt.
- */
+// ── Core LLM call (Ollama /generate) ──────────────────────────────────────────
 async function callLLM(prompt: string, label: string): Promise<string> {
   console.time(label);
   try {
-    const res = await fetch(`${OLLAMA_HOST}/api/generate`, {
+    const res = await fetch(`${OLLAMA_URL}/api/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         model: OLLAMA_MODEL,
         prompt,
         stream: false,
-        options: { temperature: TEMP },
+        options: {
+          temperature: TEMP,
+          num_ctx: LLM_NUM_CTX,
+          num_predict: LLM_NUM_PREDICT, // keep responses snappy
+          keep_alive: "15m",            // keep model resident between calls
+        },
       }),
     });
 
     if (!res.ok) {
-      throw new Error(`Ollama API error: ${res.status} ${res.statusText}`);
+      const body = await res.text().catch(() => "");
+      throw new Error(`Ollama API error: ${res.status} ${res.statusText} — ${body}`);
     }
 
     const data = await res.json();
@@ -72,73 +69,76 @@ async function callLLM(prompt: string, label: string): Promise<string> {
     return out;
   } catch (err: any) {
     console.timeEnd(label);
-    console.error(`${label}_ERROR`, {
-      msg: err?.message,
-      code: err?.code,
-      name: err?.name,
-    });
+    console.error(`${label}_ERROR`, { msg: err?.message, code: err?.code, name: err?.name });
     throw err;
   }
 }
 
-// async function callLLM(prompt: string, label: string): Promise<string> {
-//     console.time(label);
-//     try {
-//         const res = await client.generate({ model, prompt, options: { temperature: TEMP } });
-//         const out = (res.response ?? "").trim();
-//         console.timeEnd(label);
-//         return out;
-//     } catch (err: any) {
-//         console.timeEnd(label);
-//         console.error(`${label}_ERROR`, { msg: err?.message, code: err?.code, name: err?.name });
-//         throw err;
-//     }
-// }
+// ── Prompts ───────────────────────────────────────────────────────────────────
+function singlePassPrompt(text: string): string {
+  return `You are a faithful note-taker for a Dungeons & Dragons session.
 
-/**
- * Summarizes a single transcript chunk into factual bullet point summary.
- *
- * @param chunk - The transcript slice text.
- * @param idx - Index of this chunk (zero-based).
- * @param total - Total number of chunks.
- * @returns LLM-produced summary of the chunk.
- */
-async function summarizeChunk(
-  chunk: string,
-  idx: number,
-  total: number
-): Promise<string> {
-  const prompt = `You are a precise note taker for a Dungeons & Dragons session.
+MODE: VERBATIM-ONLY RECAP
+- Use ONLY facts explicitly present in the transcript.
+- Never invent names, items, quests, places, mechanics, or outcomes.
+- If something is unclear or missing, omit it.
 
-        CHUNK ${idx + 1} OF ${total} — MODE: VERBATIM-ONLY RECAP
-        Rules:
-        - Use ONLY facts that appear in THIS CHUNK.
-        - Do NOT infer or invent quests, items, mechanics, or characters not present here.
-        - Keep proper nouns exactly as written in the chunk.
-        - If a detail is uncertain in THIS CHUNK, omit it (do not guess).
+OUTPUT:
+- 5–8 bullets, each starting with "• ".
+- Short, factual bullets. Focus (if stated): plot beats, explicit NPC names/roles, locations visited,
+  items gained/lost, important player decisions & consequences, hooks/next steps.
 
-        Output format:
-        - 3-8 bullets, each starting with "• ".
-        - Short, factual bullets only.
-        - Focus on the following (if stated): plot beats, explicit NPC names/roles, locations actually visited, items gained/lost, important player decisions and their consequences, hooks/next steps that were said.
-
-        CHUNK TEXT:
-        ${chunk}`;
-
-  return callLLM(prompt, `LLM_chunk_${idx + 1}/${total}`);
+TRANSCRIPT:
+${text}`;
 }
 
-/**
- * Merges summaries in hierarchical batches to avoid issues with context window
- * and timeout.
- *
- * @param summaries - Array of partial summaries from individual chunks.
- * @returns A single merged summary string.
- */
+function chunkPrompt(chunk: string, idx: number, total: number): string {
+  return `You are a precise D&D session scribe.
+
+CHUNK ${idx + 1} OF ${total} — MODE: VERBATIM-ONLY
+- Use ONLY facts in THIS CHUNK.
+- No speculation or new info.
+- Keep proper nouns exactly as written.
+
+OUTPUT:
+- 3–6 bullets, each starting with "• ".
+- Short, factual bullets focusing on plot beats, explicit NPC names/roles, locations, items, decisions/consequences.
+
+CHUNK TEXT:
+${chunk}`;
+}
+
+function mergePrompt(summaries: string[]): string {
+  return `Combine the given D&D chunk summaries into ONE faithful recap.
+
+MODE: VERBATIM-ONLY MERGE
+- Use ONLY facts in the chunk summaries below.
+- De-duplicate, keep chronological flow.
+- If two bullets contradict, keep the clearer one; do not speculate.
+
+OUTPUT:
+- ≤10 bullets, each starting with "• ".
+- No headings or numbering—bullets only.
+
+CHUNK SUMMARIES:
+${summaries.map((s, i) => `--- CHUNK ${i + 1} ---\n${s}`).join("\n")}
+
+FINAL SUMMARY (bullets only):`;
+}
+
+// ── Summarization steps ───────────────────────────────────────────────────────
+async function summarizeChunk(chunk: string, idx: number, total: number): Promise<string> {
+  const out = await callLLM(chunkPrompt(chunk, idx, total), `LLM_chunk_${idx + 1}/${total}`);
+  return normalizeBullets(out);
+}
+
+async function mergeSummaries(summaries: string[]): Promise<string> {
+  const out = await callLLM(mergePrompt(summaries), "LLM_merge");
+  return normalizeBullets(out);
+}
+
 async function hierarchicalMerge(summaries: string[]): Promise<string> {
   let layer = summaries.slice();
-  let round = 1;
-
   while (layer.length > 1) {
     const next: string[] = [];
     for (let i = 0; i < layer.length; i += MERGE_BATCH) {
@@ -147,103 +147,59 @@ async function hierarchicalMerge(summaries: string[]): Promise<string> {
       next.push(merged.trim());
     }
     layer = next;
-    round++;
   }
   return layer[0] ?? "";
 }
 
+// ── Public API ────────────────────────────────────────────────────────────────
 /**
- * Combines a group of chunk summaries into overall summary.
- *
- * @param summaries - Array of bullet point summaries to merge.
- * @returns LLM-produced merged bullet point summary.
- */
-async function mergeSummaries(summaries: string[]): Promise<string> {
-  const prompt = `Combine the given Dungeons & Dragons chunk summaries into ONE faithful recap.
-
-        MODE: VERBATIM-ONLY MERGE
-        - Use ONLY facts that appear in the chunk summaries below.
-        - Do NOT introduce any new names, places, items, rules, or conclusions.
-        - De-duplicate and keep chronological flow.
-        - If two bullets contradict, prefer whichever is clearer and keep it neutral (omit speculation).
-
-        OUTPUT:
-        - ≤10 bullets total, each starting with "• ".
-        - No headings, no numbering, no meta-notes—bullets only.
-        - Focus on the following (if stated): plot beats, explicit NPC names/roles, locations actually visited, items gained/lost, important player decisions and their consequences, hooks/next steps that were said.
-
-        CHUNK SUMMARIES:
-        ${summaries.map((s, i) => `--- CHUNK ${i + 1} ---\n${s}`).join("\n")}
-
-        FINAL SUMMARY (bullets only):
-        `;
-  return callLLM(prompt, "LLM_merge");
-}
-
-/**
- * Summarizes an entire TTRPG session transcript.
- *
- * - If short, summarises in a single pass.
- * - If long, splits into chunks, summarizes each, then merges.
- * - Includes fallbacks if chunk or merge steps fail.
- *
- * @param rawText - Full session transcript text.
- * @returns Final summary as a bullet point string, trimmed if very long.
+ * Summarizes a DnD session transcript.
+ * - Short text → single pass
+ * - Long text → chunk, summarize in parallel (bounded), then merge
  */
 export async function summarizeDnDSession(rawText: string): Promise<string> {
-  const text = rawText?.trim() ?? "";
+  const text = (rawText ?? "").trim();
   if (!text) return "";
 
   const wordCount = text.split(/\s+/).length;
 
+  // Single-pass (faster) for short inputs
   if (wordCount <= LONG_THRESHOLD_WORDS) {
-    const prompt = `You are a faithful note-taker for a Dungeons & Dragons session.
-
-        MODE: VERBATIM-ONLY RECAP
-        - Use ONLY facts explicitly present in the transcript.
-        - Never invent names, items, quests, places, mechanics, or outcomes.
-        - If something is unclear or missing, omit it.
-
-        OUTPUT:
-        - 5-10 bullets, each starting with "• ".
-        - Keep bullets short and factual.
-        - Focus on the following (if stated): plot beats, explicit NPC names/roles, locations actually visited, items gained/lost, important player decisions and their consequences, hooks/next steps that were said.
-        - No meta-comments, no headings, no numbering, no analysis, no advice, no rules talk.
-
-        TRANSCRIPT:
-        ${text}`;
-
-    const out = await callLLM(prompt, "LLM_single");
-    return out;
+    const out = await callLLM(singlePassPrompt(text), "LLM_single");
+    return normalizeBullets(out);
   }
 
+  // Chunk & summarize in bounded parallel
   const chunks = splitIntoChunks(text);
   const miniSummaries: string[] = [];
 
-  for (let i = 0; i < chunks.length; i++) {
-    try {
-      const s = await summarizeChunk(chunks[i], i, chunks.length);
-      if (s) miniSummaries.push(s);
-    } catch {}
+  for (let i = 0; i < chunks.length; i += LLM_CONCURRENCY) {
+    const batch = chunks.slice(i, i + LLM_CONCURRENCY);
+    const outs = await Promise.allSettled(
+      batch.map((c, j) => summarizeChunk(c, i + j, chunks.length))
+    );
+    for (const o of outs) {
+      if (o.status === "fulfilled" && o.value) miniSummaries.push(o.value);
+    }
   }
 
+  // If all chunk calls failed, fallback to a clipped single-pass
   if (miniSummaries.length === 0) {
     const clipped = text.split(/\s+/).slice(0, CHUNK_TEXT).join(" ");
-    const fallbackPrompt = `You are a precise session scribe for a Dungeons & Dragons game.
-        Summarize as ≤10 bullets focusing on main story beats only (plot, NPCs, locations, items, decisions/consequences, next steps). 
-        No fluff.
-
-        SESSION (CLIPPED):
-        ${clipped}`;
-    const out = await callLLM(fallbackPrompt, "LLM_fallback_single");
-    return out;
+    const out = await callLLM(singlePassPrompt(clipped + "\n\n[Note: clipped]"), "LLM_fallback_single");
+    return normalizeBullets(out);
   }
 
+  // Merge layer-by-layer
   try {
     const merged = await hierarchicalMerge(miniSummaries);
     if (merged) return merged.trim();
-  } catch {}
+  } catch {
+    // fall through to simple join
+  }
 
+  // Last resort: join partials and trim length
   const joined = miniSummaries.join("\n");
-  return joined.length > 4000 ? joined.slice(0, 4000) + "\n…" : joined;
+  const trimmed = joined.length > 4000 ? joined.slice(0, 4000) + "\n…" : joined;
+  return trimmed;
 }
