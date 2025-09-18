@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useTranscript } from "../../context/TranscriptContext";
-
+import { ingestSummary } from "@/lib/ragClient";
 
 // size
 function formatSize(n: number) {
@@ -27,7 +27,13 @@ function wsURL() {
 }
 
 // upload modal
-function UploadModal({ onClose }: { onClose: () => void }) {
+function UploadModal({
+  onClose,
+  campaignTitle,
+}: {
+  onClose: () => void;
+  campaignTitle: string | null;
+}) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [progress, setProgress] = useState(0);
@@ -124,6 +130,20 @@ function UploadModal({ onClose }: { onClose: () => void }) {
       if (data.text) setTranscript(data.text);
       if (data.summary) {
         setSummary(data.summary);
+          // 🔽 Ingest into Chroma via your Next API
+        try {
+          await ingestSummary(data.summary, {
+            type: "summary",
+            source: "upload",
+            filename: file.name,
+            campaignTitle,
+            createdAt: new Date().toISOString(),
+          });
+          // optional: toast("Summary indexed")
+        } catch (e) {
+          console.error("Chroma ingest failed:", e);
+          // optional: toast warning
+        }
       } else {
         setSummary("• 没有生成摘要，请检查模型配置。");
       }
@@ -447,7 +467,12 @@ export default function DashboardPage() {
         </span>
       </div>
 
-      {openUpload && <UploadModal onClose={() => setOpenUpload(false)} />}
+      {openUpload && (
+        <UploadModal
+          onClose={() => setOpenUpload(false)}
+          campaignTitle={campaignTitle}
+        />
+      )}
     </div>
   );
 }
