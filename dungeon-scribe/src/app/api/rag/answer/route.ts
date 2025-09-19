@@ -1,9 +1,9 @@
 // app/api/rag/answer/route.ts
 import { NextResponse } from "next/server";
 
+const API_URL = process.env.API_URL ?? "http://127.0.0.1:8000"; // unified FastAPI
 const OLLAMA_URL = process.env.OLLAMA_URL ?? "http://127.0.0.1:11434";
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? "phi3:medium";
-const CHROMA_URL = process.env.CHROMA_URL ?? "http://127.0.0.1:8000";
 
 const SYSTEM_PROMPT = `
 You are a helpful assistant. Answer the user's question using the provided CONTEXT.
@@ -20,17 +20,22 @@ type QueryResult = {
 export async function POST(req: Request) {
     const { question, topK = 5, where } = await req.json();
 
-    // 1) Query Chroma directly (no relative URL)
-    const qRes = await fetch(`${CHROMA_URL}/query`, {
+    // 1) Query via FastAPI server (embedded Chroma)
+    const qRes = await fetch(`${API_URL}/query`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: question, top_k: topK, where }),
         cache: "no-store",
     });
+
     if (!qRes.ok) {
         const msg = await qRes.text().catch(() => "");
-        return NextResponse.json({ ok: false, error: `Chroma query failed: ${msg}` }, { status: 500 });
+        return NextResponse.json(
+        { ok: false, error: `Query failed: ${msg}` },
+        { status: 500 }
+        );
     }
+
     const { results } = (await qRes.json()) as { results: QueryResult[] };
 
     const contextBlock =
@@ -57,9 +62,13 @@ export async function POST(req: Request) {
         options: { temperature: 0.2, num_ctx: 4096 },
         }),
     });
+
     if (!chatRes.ok) {
         const msg = await chatRes.text().catch(() => "");
-        return NextResponse.json({ ok: false, error: `Ollama failed: ${msg}` }, { status: 500 });
+        return NextResponse.json(
+        { ok: false, error: `Ollama failed: ${msg}` },
+        { status: 500 }
+        );
     }
 
     const data = await chatRes.json();
@@ -68,6 +77,11 @@ export async function POST(req: Request) {
     return NextResponse.json({
         ok: true,
         answer,
-        used: results?.map((r, i) => ({ i: i + 1, id: r.id, meta: r.metadata })) ?? [],
+        used:
+        results?.map((r, i) => ({
+            i: i + 1,
+            id: r.id,
+            meta: r.metadata,
+        })) ?? [],
     });
 }

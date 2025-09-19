@@ -6,6 +6,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // ------- Config -------
+const API_URL = process.env.API_URL ?? "http://127.0.0.1:8000"; // ← unified Python backend
 const DEFAULT_TRANSCRIBE_CAP_MS = Number(process.env.TRANSCRIBE_TIMEOUT_MS ?? 600_000); // 10 min cap
 const DEFAULT_TRANSCRIBE_RTF = Number(process.env.TRANSCRIBE_RTF ?? 4); // expected real-time factor
 const MIN_TRANSCRIBE_TIMEOUT_MS = 120_000; // 2 min floor
@@ -46,12 +47,13 @@ function isPdfExt(ext: string) {
 }
 
 async function deriveAudioTimeout(
-  fileBuffer: Buffer,
-  mime: string,
+  _fileBuffer: Buffer,
+  _mime: string,
   capMs: number
 ): Promise<number> {
-  // Try to read duration; if it fails, fall back to the cap.
-    return capMs;
+  // Keep simple for now; you can add duration-based logic later.
+  // Ensure it's at least the floor and at most the cap.
+  return Math.max(MIN_TRANSCRIBE_TIMEOUT_MS, capMs);
 }
 
 // ------- Route -------
@@ -63,7 +65,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "no file" }, { status: 400 });
     }
 
-    const origin = req.nextUrl?.origin ?? new URL(req.url).origin;
     const name = file.name || "upload";
     const mime = (file.type || "").toLowerCase();
     const ext = extOf(name);
@@ -91,10 +92,10 @@ export async function POST(req: NextRequest) {
     } else if (isAudioExt(ext) || mime.startsWith("audio/") || mime === "video/mp4") {
       const perReqTimeout = await deriveAudioTimeout(buffer, mime, DEFAULT_TRANSCRIBE_CAP_MS);
 
-      // Forward original form to /api/transcribe (may hit Whisper / local STT)
-      const resp = await fetchWithTimeout(new URL("/api/transcribe", origin), {
+      // Send the original form directly to your unified FastAPI server
+      const resp = await fetchWithTimeout(`${API_URL}/transcribe`, {
         method: "POST",
-        body: form,
+        body: form as any,
       }, perReqTimeout);
 
       if (!resp.ok) {
@@ -116,7 +117,6 @@ export async function POST(req: NextRequest) {
     const payload = await analyzeSession({
       text,
       source: "upload",
-      // you can strip extension if you prefer: name.replace(/\.[^/.]+$/, "")
       title: name,
     });
 
