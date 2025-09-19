@@ -5,16 +5,17 @@ const OLLAMA_URL   = process.env.OLLAMA_URL   || "http://127.0.0.1:11434";
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "phi3:medium";
 
 // Optional tuning via env:
-const LLM_CONCURRENCY = Number(process.env.LLM_CONCURRENCY ?? 3); // parallel chunks
-const LLM_NUM_CTX     = Number(process.env.LLM_NUM_CTX ?? 4096);
-const LLM_NUM_PREDICT = Number(process.env.LLM_NUM_PREDICT ?? 256);
+const LLM_CONCURRENCY = 2;
+const LLM_NUM_CTX     = 4096;
+const LLM_NUM_PREDICT = 160;
 const TEMP = 0.1;
 
 // ── Chunking parameters ────────────────────────────────────────────────────────
-const LONG_THRESHOLD_WORDS = 1000;  // if transcript ≤ this, do single-pass
-const CHUNK_TEXT    = Number(process.env.CHUNK_TEXT ?? 700);
-const CHUNK_OVERLAP = 70;           // overlapping words between chunks
-const MERGE_BATCH   = 6;            // summaries per merge group
+const LONG_THRESHOLD_WORDS = 1000;  
+const CHUNK_TEXT    = 500;
+const CHUNK_OVERLAP = 50;         
+const MERGE_BATCH   = 6;   
+const LLM_NUM_PREDICT_MERGE = 1024;   
 
 // ── Utils ─────────────────────────────────────────────────────────────────────
 function splitIntoChunks(text: string, size = CHUNK_TEXT, overlap = CHUNK_OVERLAP): string[] {
@@ -29,18 +30,45 @@ function splitIntoChunks(text: string, size = CHUNK_TEXT, overlap = CHUNK_OVERLA
   return chunks;
 }
 
-function normalizeBullets(s: string): string {
-  return s
-    .split(/\r?\n/)
-    .map(l => l.trim())
-    .filter(Boolean)
-    .map(l => (l.startsWith("•") ? l : `• ${l}`))
-    .join("\n");
+/**
+ * Normalize LLM output into Markdown mini-sections:
+ * Ensures every section starts with "### " and has a short paragraph after it.
+ */
+function normalizeSections(s: string): string {
+  const lines = (s ?? "").split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  if (lines.length === 0) return "";
+
+  // If the model returned bullets, coerce into sections.
+  const looksLikeBullets = lines.every(l => /^[-*•]\s+/.test(l));
+  if (looksLikeBullets) {
+    return lines
+      .map((l, i) => {
+        const text = l.replace(/^[-*•]\s+/, "").trim();
+        return `### ${text}\n${i === 0 ? "" : ""}`;
+      })
+      .join("\n");
+  }
+
+  // Pass-through if headings already present.
+  const hasHeadings = lines.some(l => /^#{2,6}\s/.test(l));
+  if (hasHeadings) {
+    // Downgrade any H2/H4/etc. to H3 for consistency and collapse extra blank lines.
+    const fixed = lines
+      .map(l => l.replace(/^#{2,6}\s+/, m => "### "))
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+    return fixed;
+  }
+
+  // Otherwise, create a single section with the whole content.
+  return `### Recap\n${lines.join(" ")}`;
 }
 
 // ── Core LLM call (Ollama /generate) ──────────────────────────────────────────
-async function callLLM(prompt: string, label: string): Promise<string> {
+async function callLLM(prompt: string, label: string, numPredict = LLM_NUM_PREDICT): Promise<string> {
   console.time(label);
+  const ac = new AbortController();
   try {
     const res = await fetch(`${OLLAMA_URL}/api/generate`, {
       method: "POST",
@@ -48,33 +76,54 @@ async function callLLM(prompt: string, label: string): Promise<string> {
       body: JSON.stringify({
         model: OLLAMA_MODEL,
         prompt,
-        stream: false,
+        stream: true,                 // <— stream!
         options: {
           temperature: TEMP,
           num_ctx: LLM_NUM_CTX,
-          num_predict: LLM_NUM_PREDICT, // keep responses snappy
-          keep_alive: "15m",            // keep model resident between calls
+          num_predict: numPredict,
+          keep_alive: "15m",
         },
       }),
+      signal: ac.signal,
     });
 
-    if (!res.ok) {
+    if (!res.ok || !res.body) {
       const body = await res.text().catch(() => "");
       throw new Error(`Ollama API error: ${res.status} ${res.statusText} — ${body}`);
     }
 
-    const data = await res.json();
-    const out = (data.response ?? "").trim();
+    // Read streaming JSON lines from Ollama
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let out = "";
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      const chunk = decoder.decode(value, { stream: true });
+
+      // Ollama streams newline-delimited JSON objects
+      for (const line of chunk.split("\n")) {
+        if (!line.trim()) continue;
+        try {
+          const msg = JSON.parse(line);
+          if (typeof msg.response === "string") out += msg.response;
+        } catch {
+          // ignore partial JSON
+        }
+      }
+    }
+
     console.timeEnd(label);
-    return out;
-  } catch (err: any) {
+    return out.trim();
+  } catch (err) {
     console.timeEnd(label);
-    console.error(`${label}_ERROR`, { msg: err?.message, code: err?.code, name: err?.name });
+    console.error(`${label}_ERROR`, { msg: (err as any)?.message, name: (err as any)?.name });
     throw err;
   }
 }
 
-// ── Prompts ───────────────────────────────────────────────────────────────────
+// ── Prompts (Plain Title + Paragraph blocks) ──────────────────────────────────
 function singlePassPrompt(text: string): string {
   return `You are a faithful note-taker for a Dungeons & Dragons session.
 
@@ -83,10 +132,14 @@ MODE: VERBATIM-ONLY RECAP
 - Never invent names, items, quests, places, mechanics, or outcomes.
 - If something is unclear or missing, omit it.
 
-OUTPUT:
-- 5–8 bullets, each starting with "• ".
-- Short, factual bullets. Focus (if stated): plot beats, explicit NPC names/roles, locations visited,
-  items gained/lost, important player decisions & consequences, hooks/next steps.
+OUTPUT FORMAT (PLAIN TEXT, NO MARKDOWN):
+- Write 4–8 sections.
+- Each section MUST be:
+  Line 1: A SHORT TITLE on its own line (no hashes, no numbers, no bullets).
+  Line 2..3: 1–3 sentences of concise prose describing only facts from the text.
+- Put ONE blank line between sections.
+- Do NOT use lists or bullets. Do NOT add "###" or any other heading markup.
+- Keep proper nouns exactly as written.
 
 TRANSCRIPT:
 ${text}`;
@@ -100,9 +153,12 @@ CHUNK ${idx + 1} OF ${total} — MODE: VERBATIM-ONLY
 - No speculation or new info.
 - Keep proper nouns exactly as written.
 
-OUTPUT:
-- 3–6 bullets, each starting with "• ".
-- Short, factual bullets focusing on plot beats, explicit NPC names/roles, locations, items, decisions/consequences.
+OUTPUT FORMAT (PLAIN TEXT, NO MARKDOWN):
+- Write 2–4 sections for THIS CHUNK.
+- Each section MUST be:
+  Line 1: SHORT TITLE
+  Line 2..3: 1–3 factual sentences
+- Blank line between sections. No bullets, no numbering, no "###".
 
 CHUNK TEXT:
 ${chunk}`;
@@ -114,27 +170,72 @@ function mergePrompt(summaries: string[]): string {
 MODE: VERBATIM-ONLY MERGE
 - Use ONLY facts in the chunk summaries below.
 - De-duplicate, keep chronological flow.
-- If two bullets contradict, keep the clearer one; do not speculate.
+- If two statements contradict, keep the clearer one; do not speculate.
 
-OUTPUT:
-- ≤10 bullets, each starting with "• ".
-- No headings or numbering—bullets only.
+OUTPUT FORMAT (PLAIN TEXT, NO MARKDOWN):
+- Write 4–10 sections total.
+- Each section MUST be:
+  Line 1: SHORT TITLE (no hashes, bullets, or numbers)
+  Line 2..3: 1–3 factual sentences
+- One blank line between sections.
 
 CHUNK SUMMARIES:
 ${summaries.map((s, i) => `--- CHUNK ${i + 1} ---\n${s}`).join("\n")}
 
-FINAL SUMMARY (bullets only):`;
+FINAL RECAP (plain title + paragraph blocks only):`;
+}
+
+// ── Normalizer: coerce any bullets/markdown into Title+Paragraph blocks ───────
+function normalizeBlocks(s: string): string {
+  const raw = (s ?? "").trim();
+  if (!raw) return "";
+
+  // If the model used markdown headings, strip them.
+  const lines = raw.replace(/^#{1,6}\s+/gm, "").split(/\r?\n/);
+
+  // If the model used bullets, fold each bullet into its own "Title\n…" block.
+  const isAllBullets = lines.filter(Boolean).every(l => /^[-*•]\s+/.test(l));
+  if (isAllBullets) {
+    return lines
+      .filter(Boolean)
+      .map(l => l.replace(/^[-*•]\s+/, ""))
+      .map((t, i) => `${t.split(/[.?!]\s/)[0] || "Note"}\n${t}`)
+      .join("\n\n");
+  }
+
+  // Collapse triple+ newlines, trim, ensure single blank line between paragraphs
+  const tidy = lines
+    .map(l => l.trimEnd())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  // If there are no blank lines at all, try to split into pseudo sections by
+  // detecting sentence starts with capital letters after a period.
+  if (!/\n{2,}/.test(tidy)) {
+    const parts = tidy.split(/(?:\.\s+)(?=[A-Z"“])/).filter(Boolean);
+    if (parts.length > 1) {
+      return parts
+        .map((p, i) => {
+          const title = (p.split("\n")[0] || `Section ${i + 1}`).slice(0, 60);
+          return `${title}\n${p}${p.endsWith(".") ? "" : "."}`;
+        })
+        .join("\n\n");
+    }
+  }
+
+  return tidy;
 }
 
 // ── Summarization steps ───────────────────────────────────────────────────────
 async function summarizeChunk(chunk: string, idx: number, total: number): Promise<string> {
   const out = await callLLM(chunkPrompt(chunk, idx, total), `LLM_chunk_${idx + 1}/${total}`);
-  return normalizeBullets(out);
+  return normalizeBlocks(out);
 }
 
 async function mergeSummaries(summaries: string[]): Promise<string> {
-  const out = await callLLM(mergePrompt(summaries), "LLM_merge");
-  return normalizeBullets(out);
+  const out = await callLLM(mergePrompt(summaries), "LLM_merge", LLM_NUM_PREDICT_MERGE);
+  return normalizeBlocks(out);
 }
 
 async function hierarchicalMerge(summaries: string[]): Promise<string> {
@@ -153,20 +254,18 @@ async function hierarchicalMerge(summaries: string[]): Promise<string> {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 /**
- * Summarizes a DnD session transcript.
+ * Summarizes a DnD session transcript into mini-headings + short paragraphs (Markdown).
  * - Short text → single pass
  * - Long text → chunk, summarize in parallel (bounded), then merge
  */
 export async function summarizeDnDSession(rawText: string): Promise<string> {
   const text = (rawText ?? "").trim();
   if (!text) return "";
-
   const wordCount = text.split(/\s+/).length;
 
-  // Single-pass (faster) for short inputs
   if (wordCount <= LONG_THRESHOLD_WORDS) {
     const out = await callLLM(singlePassPrompt(text), "LLM_single");
-    return normalizeBullets(out);
+    return normalizeBlocks(out);
   }
 
   // Chunk & summarize in bounded parallel
@@ -186,8 +285,11 @@ export async function summarizeDnDSession(rawText: string): Promise<string> {
   // If all chunk calls failed, fallback to a clipped single-pass
   if (miniSummaries.length === 0) {
     const clipped = text.split(/\s+/).slice(0, CHUNK_TEXT).join(" ");
-    const out = await callLLM(singlePassPrompt(clipped + "\n\n[Note: clipped]"), "LLM_fallback_single");
-    return normalizeBullets(out);
+    const out = await callLLM(
+      singlePassPrompt(clipped + "\n\n[Note: clipped]"),
+      "LLM_fallback_single"
+    );
+    return normalizeSections(out);
   }
 
   // Merge layer-by-layer
@@ -199,7 +301,8 @@ export async function summarizeDnDSession(rawText: string): Promise<string> {
   }
 
   // Last resort: join partials and trim length
-  const joined = miniSummaries.join("\n");
+  const joined = miniSummaries.join("\n\n");
   const trimmed = joined.length > 4000 ? joined.slice(0, 4000) + "\n…" : joined;
+  console.log(trimmed)
   return trimmed;
 }
