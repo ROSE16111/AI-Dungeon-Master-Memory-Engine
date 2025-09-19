@@ -79,5 +79,9 @@ next-env.d.ts
 /src/generated/prisma
 **/prisma/*.db
 **/prisma/*.db-journal
+
+
+
+
  
  
