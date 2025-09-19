@@ -1,4 +1,4 @@
-// app/(all)/campaigns/[id]/sessions/[sessionId]/summary/page.tsx
+// ...existing code...
 import { notFound } from 'next/navigation';
 import { prisma } from '@/lib/prisma';
 
@@ -10,7 +10,7 @@ export default async function SessionSummaryPage({ params }: Props) {
     const { id: campaignId, sessionId } = params;
 
     // Ensure the session belongs to this campaign
-    const session = await prisma.session.findFirst({
+    const session = await prisma.Session.findFirst({
         where: { id: sessionId, campaignId },
         select: { sessionNumber: true, date: true, summary: true },
     });
@@ -30,3 +30,4 @@ export default async function SessionSummaryPage({ params }: Props) {
         </div>
     );
 }
+// ...existing code...
