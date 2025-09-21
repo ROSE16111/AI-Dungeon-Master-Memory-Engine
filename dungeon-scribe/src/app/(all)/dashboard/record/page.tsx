@@ -948,6 +948,225 @@ Exhausted but triumphant, the party returned to the brewery for the promised pay
     </>
   );
 }
+/******************** chatbox */
+/* ========= Fixed Chat Widget (auto-detect campaignId + calls /api/chat-turn) ========= */
+/******************** chatbox */
+/* ========= Draggable Chat Widget (auto-detect campaignId + calls /api/chat-turn) ========= */
+function ChatWidget({ campaignId: propId }: { campaignId?: string }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+
+  // 拖拽状态
+  const [pos, setPos] = useState({ x: 56, y: 106 });
+  const dragRef = useRef({ dragging: false, offsetX: 0, offsetY: 0 });
+
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!dragRef.current.dragging) return;
+      setPos({
+        x: e.clientX - dragRef.current.offsetX,
+        y: e.clientY - dragRef.current.offsetY,
+      });
+    };
+    const onUp = () => {
+      dragRef.current.dragging = false;
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, []);
+
+  const startDrag = (e: React.MouseEvent) => {
+    if (!wrapRef.current) return;
+    dragRef.current.dragging = true;
+    const rect = wrapRef.current.getBoundingClientRect();
+    dragRef.current.offsetX = e.clientX - rect.left;
+    dragRef.current.offsetY = e.clientY - rect.top;
+  };
+
+  // messages
+  type Msg = { role: "user" | "assistant"; text: string };
+  const [msgs, setMsgs] = useState<Msg[]>([
+    { role: "assistant", text: "Hi! Ask me anything." },
+  ]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  // === NEW: resolve campaignId: props > /api/current-campaign > localStorage
+  const [campaignId, setCampaignId] = useState<string | null>(propId ?? null);
+  useEffect(() => {
+    let cancelled = false;
+    async function resolveId() {
+      if (propId) {
+        setCampaignId(propId);
+        try { localStorage.setItem("currentCampaignId", propId); } catch {}
+        return;
+      }
+      try {
+        const r = await fetch("/api/current-campaign");
+        if (!r.ok) throw new Error("current-campaign not ok");
+        const d = await r.json();
+        if (!cancelled && d?.id) {
+          setCampaignId(d.id);
+          try { localStorage.setItem("currentCampaignId", d.id); } catch {}
+          return;
+        }
+      } catch {}
+      try {
+        const last = localStorage.getItem("currentCampaignId");
+        if (!cancelled && last) setCampaignId(last);
+      } catch {}
+    }
+    resolveId();
+    return () => { cancelled = true; };
+  }, [propId]);
+
+  const onOpen = () => setOpen(true);
+  const onClose = () => setOpen(false);
+
+  async function send() {
+    const text = input.trim();
+    if (!text || loading) return;
+    setInput("");
+    setMsgs((m) => [...m, { role: "user", text }]);
+    if (!campaignId) {
+      setMsgs((m) => [
+        ...m,
+        { role: "assistant", text: "No campaign selected. Try opening/creating a campaign first." },
+      ]);
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await fetch("/api/chat-turn", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ campaignId, text }),
+      });
+      const data = await res.json();
+      if (!data?.ok) throw new Error(data?.error || "chat-turn failed");
+      setMsgs((m) => [...m, { role: "assistant", text: String(data.text ?? "") }]);
+    } catch (e: any) {
+      setMsgs((m) => [
+        ...m,
+        { role: "assistant", text: `Error: ${e?.message || e}` },
+      ]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div
+      ref={wrapRef}
+      className="fixed z-[9999] select-none"
+      style={{
+        left: pos.x,
+        top: pos.y,
+        width: open ? 360 : 60,
+        height: open ? 520 : 60,
+      }}
+    >
+      {/* 折叠状态：只显示圆形按钮 */}
+      {!open && (
+        <button
+          aria-label="Open Chat"
+          className="h-[60px] w-[60px] rounded-full bg-transparent grid place-items-center cursor-pointer"
+          onClick={onOpen}
+          title="Chat"
+          type="button"
+        >
+          <img src="/chatbox.png" alt="chatbot" className="w-10 h-10 object-contain" />
+        </button>
+      )}
+
+      {/* 展开状态 */}
+      {open && (
+        <section
+          className="w-[360px] h-[520px] bg-white rounded-[22px] shadow-2xl grid grid-rows-[auto_1fr_auto] overflow-hidden"
+        >
+          {/* 顶栏 (可拖拽) */}
+          <header
+            className="bg-indigo-600 text-white px-3 py-3 flex items-center justify-between cursor-move"
+            onMouseDown={startDrag}
+          >
+            <div className="flex items-center gap-2">
+              <div className="h-9 w-9 rounded-full bg-white/20 grid place-items-center overflow-hidden">
+                <img src="/chatbox.png" alt="bot" className="w-5 h-5 object-contain" />
+              </div>
+              <div className="leading-4">
+                <div className="font-semibold">Assistant</div>
+                <div className="text-xs opacity-90 flex items-center gap-1">
+                  <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_0_3px_rgba(16,185,129,.25)]"></span>
+                  Online
+                </div>
+              </div>
+            </div>
+            <button
+              aria-label="Minimize"
+              onClick={onClose}
+              className="h-8 w-8 rounded-md bg-white/20 grid place-items-center hover:bg-white/30"
+              title="Minimize"
+              type="button"
+            >
+              <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M5 12h14"></path>
+              </svg>
+            </button>
+          </header>
+
+          {/* 消息区 */}
+          <div className="overflow-auto px-3 py-3 bg-slate-50">
+            {msgs.map((m, i) => (
+              <div key={i} className={`mb-3 ${m.role === "user" ? "flex justify-end" : ""}`}>
+                <div
+                  className={`max-w-[80%] rounded-2xl px-4 py-3 ${
+                    m.role === "user" ? "bg-gray-200 text-gray-900" : "text-white bg-violet-800"
+                  }`}
+                >
+                  {m.text}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* 输入区 */}
+          <div className="px-3 pb-3">
+            <div className="flex gap-2">
+              <input
+                className="flex-1 border rounded-xl px-3 h-11 outline-none text-gray-900 placeholder-gray-400 caret-gray-900"
+                placeholder={campaignId ? "Type your message here..." : "No campaign selected"}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") send();
+                }}
+                disabled={!campaignId || loading}
+              />
+              <button
+                className="h-11 w-11 rounded-xl bg-indigo-600 text-white grid place-items-center disabled:opacity-50"
+                onClick={send}
+                aria-label="Send"
+                type="button"
+                disabled={!campaignId || loading || !input.trim()}
+              >
+                <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M22 2L11 13"></path>
+                  <path d="M22 2L15 22L11 13L2 9L22 2Z"></path>
+                </svg>
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
+
+
 
 export default function RecordPage() {
   useLockBodyScroll();
@@ -1527,6 +1746,8 @@ export default function RecordPage() {
           )}
         </section>
       </main>
+      <ChatWidget campaignId={id} />
+
     </div>
   );
 }

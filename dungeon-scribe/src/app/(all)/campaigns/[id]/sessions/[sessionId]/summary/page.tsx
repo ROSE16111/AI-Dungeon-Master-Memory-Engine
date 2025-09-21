@@ -10,7 +10,7 @@ export default async function SessionSummaryPage({ params }: Props) {
     const { id: campaignId, sessionId } = params;
 
     // Ensure the session belongs to this campaign
-    const session = await prisma.Session.findFirst({
+    const session = await prisma.session.findFirst({
         where: { id: sessionId, campaignId },
         select: { sessionNumber: true, date: true, summary: true },
     });
