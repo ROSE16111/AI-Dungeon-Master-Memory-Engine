@@ -363,7 +363,7 @@ export default function ResourcesPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [max]);
 
-  /* 你的 handleCreate：保留（不动） */
+  /* handleCreate 创建新的卡片 */
   async function handleCreate() {
     if (!createName.trim() || !createFile) return;
     try {

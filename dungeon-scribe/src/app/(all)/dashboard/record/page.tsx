@@ -592,40 +592,7 @@ function SessionsInsidePaper({
 }) {
   const { summary } = useTranscript();
 
-  const raw =
-    summary ||
-    `Arrival in Town
-The adventurers arrived in town looking for work. An old man directed them to a brewing company owned by a gnome named Glowkindle, who needed help clearing out giant rats in his cellar.
-
-Brewing Company Encounter
-One player tried sneaking around the back, even attempting (and failing) to break into the cellar. Inside, Glowkindle offered the group 25 gold each to kill the rats. He also promised an extra magical sword to one player.
-
-Into the Cellar
-The group descended a rickety staircase into a damp cellar. Crates were piled high; the air smelled of grain and stale ale. Scratching echoed from behind a broken cask. When a lid slid aside, a pair of red eyes blinked and leapt forward—rats the size of small dogs.
-
-Giant Rats & Hazard
-Two swarms surged at once. While the fighter held the line, the rogue kicked over a lantern and set a ring of light around the party. A wooden support cracked under the chaos; debris rained down, splitting the group in two.
-
-Unexpected Help
-From a drain tunnel, a half-sober dwarf named Boran crawled out, swinging a mop like a spear. He’d fallen asleep during his shift and woke to the squealing. “I’ll take left!” he shouted, and somehow he did.
-
-The Arcane Keg
-Amid the fight, the wizard sensed faint runes humming on a sealed barrel. A single glyph—“pressure”—glowed. A quick dispel disabled it just as a rat tried to chew through the wax seal. The barrel sighed instead of detonating.
-
-Aftermath
-With the swarm scattered, the party found chewed ledgers and a lockbox. Inside were 12 gold, a wax-stamped note from a rival brewer, and a short blue dagger with a crystalline edge. Glowkindle gasped: “That’s the sample I lost!”
-
-Lead to the Sewers
-Tracks led to a crack in the wall and a tiny tunnel spilling toward the town sewers. The old man’s directions suddenly made sense—this wasn’t just a rat problem; someone was feeding them. Glowkindle begged the party to follow the trail.
-
-Sewer Ambush
-Down in the tunnels, the party waded ankle-deep in water. A wooden plank bridge creaked ahead. As they crossed, figures in burlap masks cut the ropes. The barbarian caught the plank by sheer strength while the cleric pulled everyone up with a burst of radiant light.
-
-Clues & Complications
-Among the masked thugs: a bruised apprentice from the rival brewery, muttering that “the Baron wants Glowkindle ruined.” The note in the lockbox matched his story. A rendezvous was scrawled for tomorrow at dawn near the north gate.
-
-To Be Continued
-Exhausted but triumphant, the party returned to the brewery for the promised payment—and to plan an ambush of their own at sunrise.`;
+  const raw = summary || `(demo summary)Arrival in Town`;
 
   // 解析为 {title, body} 数组；后续可直接换成接口返回的数据
   type Block = { title: string; body: string };
@@ -1112,7 +1079,9 @@ function ChatWidget() {
 
 export default function RecordPage() {
   useLockBodyScroll();
-  const { transcript, setTranscript } = useTranscript();
+  // const { transcript, setTranscript } = useTranscript();
+  const { transcript, setTranscript, setSummary } = useTranscript();
+
   const router = useRouter();
   const params = useParams();
   const id = Array.isArray((params as any)?.id)
@@ -1358,6 +1327,9 @@ export default function RecordPage() {
           }
           if (typeof data.final === "string" && data.final.trim()) {
             setTranscript((prev) => (prev ? prev + "\n" : "") + data.final);
+          }
+          if (typeof data.summary === "string" && data.summary.trim()) {
+            setSummary(data.summary);
           }
         } catch {}
       };
