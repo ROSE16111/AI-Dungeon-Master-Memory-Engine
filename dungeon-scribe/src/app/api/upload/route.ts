@@ -1,7 +1,7 @@
 // src/app/api/upload/route.ts
 import { NextRequest, NextResponse } from "next/server";
 
-// export const runtime = "nodejs";
+export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
