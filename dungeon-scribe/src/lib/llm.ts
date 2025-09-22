@@ -15,7 +15,7 @@ const LONG_THRESHOLD_WORDS = 1000;
 const CHUNK_TEXT    = 500;
 const CHUNK_OVERLAP = 50;         
 const MERGE_BATCH   = 6;   
-const LLM_NUM_PREDICT_MERGE = 1024;   
+const LLM_NUM_PREDICT_MERGE = 2024;   
 
 // ── Utils ─────────────────────────────────────────────────────────────────────
 function splitIntoChunks(text: string, size = CHUNK_TEXT, overlap = CHUNK_OVERLAP): string[] {

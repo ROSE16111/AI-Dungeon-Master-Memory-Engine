@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useTranscript } from "../../context/TranscriptContext";
-import { ingestSummary } from "@/lib/ragClient";
+import { ragIngestTranscript } from "@/lib/ragClient";
 
 // size
 function formatSize(n: number) {
@@ -128,24 +128,24 @@ function UploadModal({
 
       // 更新上下文：原始文字 & 摘要
       if (data.text) setTranscript(data.text);
-      if (data.summary) {
-        setSummary(data.summary);
-          // 🔽 Ingest into Chroma via your Next API
-        try {
-          await ingestSummary(data.summary, {
-            type: "summary",
+      if (data.summary) setSummary(data.summary);
+      if (data.text?.trim()) {
+        // deterministic-ish id prefix: campaign/title + filename + timestamp
+        const idPrefix = `${campaignTitle || "upload"}:${file.name.replace(/\W+/g, "_")}:${Date.now()}`;
+
+        await ragIngestTranscript({
+          idPrefix,
+          text: data.text,
+          metadata: {
             source: "upload",
             filename: file.name,
             campaignTitle,
             createdAt: new Date().toISOString(),
-          });
-          // optional: toast("Summary indexed")
-        } catch (e) {
-          console.error("Chroma ingest failed:", e);
-          // optional: toast warning
-        }
+          },
+        });
+        // optional: toast("Transcript indexed")
       } else {
-        setSummary("• 没有生成摘要，请检查模型配置。");
+        console.warn("No transcript text returned from /api/upload");
       }
 
       router.push("/dashboard/record");

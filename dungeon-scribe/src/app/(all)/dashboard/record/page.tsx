@@ -952,24 +952,17 @@ function ChatWidget() {
     }
 
     try {
-      const { answer, used } = await ragAnswer({
-        question: val,
-        topK: 5,
-        where: { type: "summary" }, // adjust to your metadata
-      });
-
-      const sources =
-        used && used.length
-          ? `<div class="mt-2 text-xs opacity-80">— sources: ${used
-              .map((u) => escapeHtml(String(u.id)))
-              .join(", ")}</div>`
-          : "";
+    const { answer } = await ragAnswer({
+      question: val,
+      topK: 5,
+      where: { type: "raw" }, // important
+    });
 
       const bot = document.createElement("div");
       bot.className = "mb-3";
       bot.innerHTML = `<div class="max-w-[80%] rounded-2xl px-4 py-3 text-white bg-violet-800 whitespace-pre-wrap">${escapeHtml(
         answer || "[no answer]"
-      )}${sources}</div>`;
+      )}</div>`;
       list.appendChild(bot);
       list.scrollTop = list.scrollHeight;
     } catch (err: any) {
