@@ -21,13 +21,24 @@ type Story = {
 };
 
 // =========== !!!!! Define array to store stories(just demo content,connect with backend)
-const stories: Story[] = Array.from({ length: 12 }).map((_, i) => ({
-  id: `s${i + 1}`,
-  title: "Forest Adventure",
-  date: "17th/Aug 2025",
-  imageUrl: "/Griff.png",
-  completed: i % 2 === 0, // Used for testing temporarily
-}));
+// const [stories, setStories] = useState<Story[]>([]);
+
+// useEffect(() => {
+//   fetch("/api/data")
+//     .then((res) => res.json())
+//     .then((data) => {
+//       const mapped = (data.campaigns || []).map((c: any) => ({
+//         id: c.id,
+//         title: c.title,
+//         date: c.updateDate
+//           ? new Date(c.updateDate).toLocaleDateString()
+//           : "",
+//         imageUrl: "/Griff.png", // Replace with c.imageUrl if available
+//         completed: true, // Replace with real field if available
+//       }));
+//       setStories(mapped);
+//     });
+// }, []);
 
 /* *****======== Component 1： Filter==== ******/
 function HistoryFilter({
@@ -279,6 +290,28 @@ function ConfirmModal({
 
 /************* Components 5: main Page ***********/
 export default function HistoryPage() {
+  const [stories, setStories] = useState<Story[]>([]);
+
+  useEffect(() => {
+    fetch("/api/data")
+      .then((res) => res.json())
+      .then((data) => {
+        const mapped = (data.campaigns || []).map((c: any) => ({
+          id: c.id,
+          title: c.title,
+          date: c.updateDate
+            ? new Date(c.updateDate).toLocaleDateString('en-US', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+              })
+            : "",
+          imageUrl: "/Griff.png", // Replace with c.imageUrl if available
+          completed: true, // Replace with real field if available
+        }));
+        setStories(mapped);
+      });
+  }, []);
   const router = useRouter();
 
   //Manages the filter status activeTab

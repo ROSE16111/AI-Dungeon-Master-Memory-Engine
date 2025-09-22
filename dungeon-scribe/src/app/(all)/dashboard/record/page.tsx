@@ -1080,7 +1080,7 @@ function ChatWidget() {
 export default function RecordPage() {
   useLockBodyScroll();
   // const { transcript, setTranscript } = useTranscript();
-  const { transcript, setTranscript, setSummary } = useTranscript();
+  const { transcript, summary, setTranscript, setSummary } = useTranscript();
 
   const router = useRouter();
   const params = useParams();
@@ -1408,6 +1408,27 @@ export default function RecordPage() {
       (window as any).__asrSession = null;
       setIsRecording(false);
       console.log("[ASR] stopped & cleaned");
+
+      // === Store transcript and summary in DB ===
+      // Get campaign title from dashboard context or fallback
+      let campaignTitle = "Untitled Campaign";
+      if (typeof window !== "undefined") {
+        // Try to get campaign title from localStorage (set by dashboard)
+        const storedTitle = window.localStorage.getItem("currentCampaignTitle");
+        if (storedTitle) campaignTitle = storedTitle;
+      }
+      if (transcript && summary && campaignTitle) {
+        fetch("/api/analyze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text: transcript,
+            title: campaignTitle,
+            source: "live",
+            summary,
+          }),
+        }).catch((e) => console.error("Failed to save transcript/summary", e));
+      }
     }
   };
 
