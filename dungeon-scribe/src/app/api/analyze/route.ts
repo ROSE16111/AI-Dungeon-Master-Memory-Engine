@@ -51,6 +51,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Empty text" }, { status: 400 });
     }
 
+
     // Use provided title or fallback to default
     const campaignTitle = (body.title || "Untitled Campaign").trim();
 
@@ -68,6 +69,12 @@ export async function POST(req: Request) {
       },
     });
 
+    // Only update the selected campaign's updateDate using its unique id
+    await prisma.campaign.update({
+      where: { id: campaign.id },
+      data: { updateDate: new Date() },
+    });
+
     // Generate summary bullets using the LLM
     const summaryBullets = (await summarizeDnDSession(text)).trim();
 
@@ -83,6 +90,12 @@ export async function POST(req: Request) {
         content,  
         campaignId: campaign.id,
       },
+    });
+
+    // Update campaign updateDate again (in case only summary is updated)
+    await prisma.campaign.update({
+      where: { id: campaign.id },
+      data: { updateDate: new Date() },
     });
 
     // Return JSON response with references to stored objects

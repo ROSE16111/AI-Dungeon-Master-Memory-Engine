@@ -5,7 +5,7 @@ export async function POST(req: Request) {
 
   //send the uploaded audio file to the Python HTTP service (port 5001)
   const upstream =
-    process.env.TRANSCRIBE_HTTP || "http://localhost:5001/transcribe";
+    process.env.TRANSCRIBE_HTTP || "http://localhost:8001/transcribe";
   const py = await fetch(upstream, {
     method: "POST",
     body: form as any,

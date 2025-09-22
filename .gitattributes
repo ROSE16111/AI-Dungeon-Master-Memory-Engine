@@ -1,0 +1,16 @@
+# 默认把所有文本文件保存为 LF
+* text=auto eol=lf
+
+# Windows 脚本保持 CRLF
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# 保持二进制文件原样
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.pdf binary
+*.docx binary
+
+node_modules/

@@ -592,40 +592,7 @@ function SessionsInsidePaper({
 }) {
   const { summary } = useTranscript();
 
-  const raw =
-    summary ||
-    `Arrival in Town
-The adventurers arrived in town looking for work. An old man directed them to a brewing company owned by a gnome named Glowkindle, who needed help clearing out giant rats in his cellar.
-
-Brewing Company Encounter
-One player tried sneaking around the back, even attempting (and failing) to break into the cellar. Inside, Glowkindle offered the group 25 gold each to kill the rats. He also promised an extra magical sword to one player.
-
-Into the Cellar
-The group descended a rickety staircase into a damp cellar. Crates were piled high; the air smelled of grain and stale ale. Scratching echoed from behind a broken cask. When a lid slid aside, a pair of red eyes blinked and leapt forward—rats the size of small dogs.
-
-Giant Rats & Hazard
-Two swarms surged at once. While the fighter held the line, the rogue kicked over a lantern and set a ring of light around the party. A wooden support cracked under the chaos; debris rained down, splitting the group in two.
-
-Unexpected Help
-From a drain tunnel, a half-sober dwarf named Boran crawled out, swinging a mop like a spear. He’d fallen asleep during his shift and woke to the squealing. “I’ll take left!” he shouted, and somehow he did.
-
-The Arcane Keg
-Amid the fight, the wizard sensed faint runes humming on a sealed barrel. A single glyph—“pressure”—glowed. A quick dispel disabled it just as a rat tried to chew through the wax seal. The barrel sighed instead of detonating.
-
-Aftermath
-With the swarm scattered, the party found chewed ledgers and a lockbox. Inside were 12 gold, a wax-stamped note from a rival brewer, and a short blue dagger with a crystalline edge. Glowkindle gasped: “That’s the sample I lost!”
-
-Lead to the Sewers
-Tracks led to a crack in the wall and a tiny tunnel spilling toward the town sewers. The old man’s directions suddenly made sense—this wasn’t just a rat problem; someone was feeding them. Glowkindle begged the party to follow the trail.
-
-Sewer Ambush
-Down in the tunnels, the party waded ankle-deep in water. A wooden plank bridge creaked ahead. As they crossed, figures in burlap masks cut the ropes. The barbarian caught the plank by sheer strength while the cleric pulled everyone up with a burst of radiant light.
-
-Clues & Complications
-Among the masked thugs: a bruised apprentice from the rival brewery, muttering that “the Baron wants Glowkindle ruined.” The note in the lockbox matched his story. A rendezvous was scrawled for tomorrow at dawn near the north gate.
-
-To Be Continued
-Exhausted but triumphant, the party returned to the brewery for the promised payment—and to plan an ambush of their own at sunrise.`;
+  const raw = summary || `(demo summary)Arrival in Town`;
 
   // 解析为 {title, body} 数组；后续可直接换成接口返回的数据
   type Block = { title: string; body: string };
@@ -948,10 +915,173 @@ Exhausted but triumphant, the party returned to the brewery for the promised pay
     </>
   );
 }
+/******************** chatbox */
+/* ========= Fixed Chat Widget (click to open, no drag) ========= */
+/* ========= Fixed Chat Widget ========= */
+function ChatWidget() {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+
+  // 固定初始位置：56,106（每次打开/刷新都一样）
+  useEffect(() => {
+    if (wrapRef.current) {
+      wrapRef.current.style.left = '56px';
+      wrapRef.current.style.top = '96px';
+    }
+  }, []);
+
+  const onOpen = () => setOpen(true);
+  const onClose = () => setOpen(false);
+
+  return (
+    <div
+      ref={wrapRef}
+      className="fixed z-[9999] select-none"
+      style={{
+        left: 56,
+        top: 106,
+        width: open ? 360 : 60,
+        height: open ? 520 : 60,
+      }}
+    >
+      {/* 折叠状态：只显示圆形按钮 */}
+      {!open && (
+        <button
+          aria-label="Open Chat"
+          className="h-[60px] w-[60px] rounded-full bg-transparent grid place-items-center cursor-pointer"
+          onClick={onOpen}
+          title="Chat"
+          type="button"
+        >
+          <img
+            src="/chatbox.png"
+            alt="chatbot"
+            className="w-10 h-10 object-contain"
+          />
+        </button>
+      )}
+
+      {/* 展开状态 */}
+      {open && (
+        <section className="w-[360px] h-[520px] bg-white rounded-[22px] shadow-2xl grid grid-rows-[auto_1fr_auto] overflow-hidden">
+          {/* 顶栏 */}
+          <header className="bg-indigo-600 text-white px-3 py-3 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="h-9 w-9 rounded-full bg-white/20 grid place-items-center overflow-hidden">
+                <img src="/chatbox.png" alt="bot" className="w-5 h-5 object-contain" />
+              </div>
+              <div className="leading-4">
+                <div className="font-semibold">Assistant</div>
+                <div className="text-xs opacity-90 flex items-center gap-1">
+                  <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_0_3px_rgba(16,185,129,.25)]"></span>
+                  Online
+                </div>
+              </div>
+            </div>
+            <button
+              aria-label="Minimize"
+              onClick={onClose}
+              className="h-8 w-8 rounded-md bg-white/20 grid place-items-center hover:bg-white/30"
+              title="Minimize"
+              type="button"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                className="w-4 h-4"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <path d="M5 12h14"></path>
+              </svg>
+            </button>
+          </header>
+
+          {/* 消息区 */}
+          <div className="overflow-auto px-3 py-3 bg-slate-50">
+            <div className="mb-3">
+              <div className="max-w-[80%] rounded-2xl px-4 py-3 text-white bg-violet-800">
+                Hi! Ask me anything.
+              </div>
+            </div>
+          </div>
+
+          {/* 输入区 —— 修正：深色文字可见 */}
+          <div className="px-3 pb-3">
+            <div className="flex gap-2">
+              <input
+                className="flex-1 border rounded-xl px-3 h-11 outline-none text-gray-900 placeholder-gray-400 caret-gray-900"
+                placeholder="Type your message here..."
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    const val = (e.target as HTMLInputElement).value.trim();
+                    if (!val) return;
+
+                    const inputEl = e.target as HTMLInputElement;
+                    const list = (e.currentTarget as HTMLElement)
+                      .closest('section')!
+                      .querySelector('.overflow-auto') as HTMLDivElement;
+
+                    // 添加用户消息
+                    const mine = document.createElement('div');
+                    mine.className = 'mb-3 flex justify-end';
+                    mine.innerHTML = `<div class="max-w-[80%] rounded-2xl px-4 py-3 bg-gray-200 text-gray-900">${val}</div>`;
+                    list.appendChild(mine);
+                    inputEl.value = '';
+                    list.scrollTop = list.scrollHeight;
+
+                    // 模拟回复
+                    setTimeout(() => {
+                      const bot = document.createElement('div');
+                      bot.className = 'mb-3';
+                      bot.innerHTML = `<div class="max-w-[80%] rounded-2xl px-4 py-3 text-white bg-violet-800">Got it: ${val}</div>`;
+                      list.appendChild(bot);
+                      list.scrollTop = list.scrollHeight;
+                    }, 200);
+                  }
+                }}
+              />
+              <button
+                className="h-11 w-11 rounded-xl bg-indigo-600 text-white grid place-items-center"
+                onClick={(e) => {
+                  const input = e.currentTarget
+                    .previousSibling as HTMLInputElement;
+                  input.dispatchEvent(
+                    new KeyboardEvent('keydown', {
+                      key: 'Enter',
+                      bubbles: true,
+                    })
+                  );
+                }}
+                aria-label="Send"
+                type="button"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  className="w-5 h-5"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                >
+                  <path d="M22 2L11 13"></path>
+                  <path d="M22 2L15 22L11 13L2 9L22 2Z"></path>
+                </svg>
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
+
+
 
 export default function RecordPage() {
   useLockBodyScroll();
-  const { transcript, setTranscript } = useTranscript();
+  // const { transcript, setTranscript } = useTranscript();
+  const { transcript, summary, setTranscript, setSummary } = useTranscript();
+
   const router = useRouter();
   const params = useParams();
   const id = Array.isArray((params as any)?.id)
@@ -1198,6 +1328,9 @@ export default function RecordPage() {
           if (typeof data.final === "string" && data.final.trim()) {
             setTranscript((prev) => (prev ? prev + "\n" : "") + data.final);
           }
+          if (typeof data.summary === "string" && data.summary.trim()) {
+            setSummary(data.summary);
+          }
         } catch {}
       };
 
@@ -1275,6 +1408,27 @@ export default function RecordPage() {
       (window as any).__asrSession = null;
       setIsRecording(false);
       console.log("[ASR] stopped & cleaned");
+
+      // === Store transcript and summary in DB ===
+      // Get campaign title from dashboard context or fallback
+      let campaignTitle = "Untitled Campaign";
+      if (typeof window !== "undefined") {
+        // Try to get campaign title from localStorage (set by dashboard)
+        const storedTitle = window.localStorage.getItem("currentCampaignTitle");
+        if (storedTitle) campaignTitle = storedTitle;
+      }
+      if (transcript && summary && campaignTitle) {
+        fetch("/api/analyze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text: transcript,
+            title: campaignTitle,
+            source: "live",
+            summary,
+          }),
+        }).catch((e) => console.error("Failed to save transcript/summary", e));
+      }
     }
   };
 
@@ -1527,6 +1681,7 @@ export default function RecordPage() {
           )}
         </section>
       </main>
+      <ChatWidget />
     </div>
   );
 }

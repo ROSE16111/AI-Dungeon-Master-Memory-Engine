@@ -1,7 +1,7 @@
 // src/app/api/upload/route.ts
 import { NextRequest, NextResponse } from "next/server";
 
-// export const runtime = "nodejs";
+export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
@@ -15,6 +15,7 @@ export async function POST(req: NextRequest) {
     const arrayBuf = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuf);
     const name = (file.name || "").toLowerCase();
+    const campaignTitle = (form.get("campaignTitle") || "Untitled Campaign").toString();
 
     let text = "";
 
@@ -75,7 +76,7 @@ export async function POST(req: NextRequest) {
         body: JSON.stringify({
           text,
           source: "upload",
-          title: file.name || "Untitled Upload",
+          title: campaignTitle,
         }),
       });
 

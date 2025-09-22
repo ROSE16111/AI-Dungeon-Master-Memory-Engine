@@ -80,8 +80,13 @@ next-env.d.ts
 **/prisma/*.db
 **/prisma/*.db-journal
 
+# IDE configs
+.idea/
+.vscode/
+.vs/
 
-
-
- 
- 
+# Python virtual environments
+.venv/
+venv/
+env/
+.env/

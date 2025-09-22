@@ -1,8 +1,7 @@
-import asyncio, websockets, json, queue, time
+import asyncio, websockets, json, queue, time, requests
 import numpy as np
 import webrtcvad
 from faster_whisper import WhisperModel
-from datetime import datetime
 
 # ========= Configuration =========
 SAMPLE_RATE = 16000
@@ -17,12 +16,13 @@ LANG = "en"
 BEAM = 1
 TEMP = 0.0
 
-print("[Init] Loading model …")
+print("[Init] Loading Whisper model …")
 model = WhisperModel(MODEL_NAME, device="cpu", compute_type="int8")
 vad = webrtcvad.Vad(2)
 
 audio_q: "queue.Queue[np.ndarray]" = queue.Queue(maxsize=200)
 
+# ========= Whisper helper =========
 def is_speech_int16(frames_int16: np.ndarray) -> bool:
     try:
         return vad.is_speech(frames_int16.tobytes(), SAMPLE_RATE)
@@ -41,9 +41,34 @@ def transcribe_float32(wave_f32: np.ndarray) -> str:
     )
     return "".join(seg.text for seg in segments).strip()
 
+# ========= Ollama summarizer =========
+def summarize_with_ollama(text: str, model: str = "phi3:medium") -> str:
+    try:
+        print(f"[Ollama] sending prompt (len={len(text)} chars)")
+        resp = requests.post(
+            "http://localhost:11434/api/generate",
+            headers={"Content-Type": "application/json"},
+            json={
+                "model": model,
+                "prompt": f"Summarize the following transcript into concise bullet points:\n\n{text}",
+                "stream": False
+            },
+            timeout=120
+        )
+        print(f"[Ollama] HTTP status: {resp.status_code}")
+        if resp.ok:
+            data = resp.json()
+            print(f"[Ollama] raw response: {data}")
+            return data.get("response", "").strip()
+        else:
+            return f"[Error] Ollama HTTP {resp.status_code}"
+    except Exception as e:
+        print(f"[Ollama] error: {e}")
+        return f"[Error] {e}"
+
+# ========= WebSocket audio handler =========
 async def audio_handler(websocket):
     print("[Client] connected")
-    session_start = time.time()
     speaking = False
     last_voice_time = 0.0
     last_partial_time = 0.0
@@ -52,17 +77,19 @@ async def audio_handler(websocket):
     tail = np.zeros(int(OVERLAP_SEC * SAMPLE_RATE), dtype=np.int16)
     buf = []
     now = lambda: time.time()
-    utt_start_wall = None
+    cache_text = ""   # 累计文本用于总结
 
     try:
         async for message in websocket:
+            # print(f"[WS] received {len(message)} bytes")
             pcm16 = np.frombuffer(message, dtype=np.int16)
             voiced = is_speech_int16(pcm16)
 
+            # ====== Partial ======
             if voiced:
                 if not speaking:
                     speaking = True
-                    utt_start_wall = now()
+                    print("[State] speaking started")
                 last_voice_time = now()
                 buf.append(pcm16)
 
@@ -72,25 +99,45 @@ async def audio_handler(websocket):
                     try:
                         text = transcribe_float32(wave)
                         if text and text != last_partial_text:
-                            await websocket.send(json.dumps({"partial": text}))
+                            print(f"[partial] {text}")
+                            msg = {"partial": text}
+                            print(f"[WS] sending {msg}")
+                            await websocket.send(json.dumps(msg))
                             last_partial_text = text
                     except Exception as e:
                         print(f"[warn] partial failed: {e}")
                     last_partial_time = now()
 
+            # ====== Final + Summary ======
             else:
                 if speaking and (now() - last_voice_time) * 1000 >= SILENCE_END_MS:
                     speaking = False
-                    utt_end_wall = now()
                     utter = np.concatenate([tail, *buf]) if buf else tail
                     wave = utter.astype(np.float32) / 32768.0
                     try:
                         final_text = transcribe_float32(wave)
                         if final_text:
-                            await websocket.send(json.dumps({"final": final_text}))
+                            print(f"[final] {final_text}")
+                            msg = {"final": final_text}
+                            print(f"[WS] sending {msg}")
+                            await websocket.send(json.dumps(msg))
+
+                            cache_text += " " + final_text
+                            print(f"[cache] len={len(cache_text)} chars, content={cache_text!r}")
+
+                            # === Summarize when enough content ===
+                            if len(cache_text) >= 30:   # 阈值可调
+                                print("[summary] calling Ollama …")
+                                summary = summarize_with_ollama(cache_text)
+                                print(f"[summary]\n{summary}\n")
+                                msg = {"summary": summary}
+                                print(f"[WS] sending {msg}")
+                                await websocket.send(json.dumps(msg))
+                                cache_text = ""
                     except Exception as e:
                         print(f"[warn] final failed: {e}")
 
+                    # maintain tail
                     if utter.size >= tail.size:
                         tail = utter[-tail.size:].copy()
                     else:
@@ -99,11 +146,11 @@ async def audio_handler(websocket):
                     buf.clear()
                     last_partial_text = ""
                     last_partial_time = now()
-                    utt_start_wall = None
 
     except websockets.exceptions.ConnectionClosed:
         print("[Client] disconnected")
 
+# ========= Main =========
 async def main():
     async with websockets.serve(audio_handler, "0.0.0.0", 8000):
         print("[Server] running on ws://0.0.0.0:8000/audio")
