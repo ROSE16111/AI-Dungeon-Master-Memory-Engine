@@ -10,7 +10,7 @@
 - framework: React+Tailwind+shadcn/ui
 - components:`npx shadcn@latest add avatar separator button card input label tabs dialog textarea sheet`
 - icon lib: lucide-react
-
+- ollama
 ## cmd
 
 `pwd` check current
