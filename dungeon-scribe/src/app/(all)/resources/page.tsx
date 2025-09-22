@@ -233,7 +233,7 @@ function ResourceCard({
   return (
     <Card className="overflow-hidden rounded-2xl bg-white/90 backdrop-blur">
       <CardHeader className="p-0">
-        <div className="relative h-36 w-full">
+        <div className="relative h-33 w-full">
           <Image
             src={it.img}
             alt={it.title}
@@ -244,7 +244,7 @@ function ResourceCard({
         </div>
       </CardHeader>
 
-      <CardContent className="px-4 pt-3">
+      <CardContent className="px-4 pt-2">
         <div className="flex items-start justify-between">
           <div>
             <CardTitle className="text-base">{it.title}</CardTitle>
@@ -266,7 +266,7 @@ function ResourceCard({
         </div>
       </CardContent>
 
-      <CardFooter className="px-4 pb-4 pt-2 justify-end gap-2">
+      <CardFooter className="px-4 pb-2 pt-0 justify-end gap-2">
         {/* ✅ Open 改成弹出浮层 */}
         <Button variant="outline" size="sm" onClick={() => onOpen(it)}>
           Open
@@ -334,21 +334,33 @@ export default function ResourcesPage() {
     [items, view]
   );
 
-  /* 原有分页逻辑：保持不变 */
-  const pages: CardItem[][] = useMemo(() => {
-    const arr = [...data];
-    return Array.from({ length: Math.ceil((arr.length + 1) / 6) }, (_, i) => {
-      const slice = arr.slice(i * 6, i * 6 + 6);
-      if (i === 0)
-        slice.push({
-          id: "__add__",
-          title: "",
-          img: "",
-          category: view,
-        } as CardItem);
-      return slice.slice(0, 6);
-    });
-  }, [data, view]);
+
+// add card 在最后
+// 先得到一个“最终列表”：所有资源 + 末尾的 Add 卡片
+const listWithAdd = useMemo(() => {
+  const list = [...data];
+  list.push({
+    id: "__add__",
+    title: "",
+    img: "",
+    category: view,
+  } as CardItem);
+  return list;
+}, [data, view]);
+
+// 再把它按 6 个一页切片
+const pages: CardItem[][] = useMemo(() => {
+  const len = listWithAdd.length;
+  const pageCount = Math.ceil(len / 6);
+  return Array.from({ length: pageCount }, (_, i) =>
+    listWithAdd.slice(i * 6, i * 6 + 6)
+  );
+}, [listWithAdd]);
+
+//页面保护
+useEffect(() => {
+  setIndex((i) => Math.min(i, Math.max(0, pages.length - 1)));
+}, [pages.length]);
 
   const [index, setIndex] = useState(0);
   const max = Math.max(0, pages.length - 1);
@@ -462,43 +474,49 @@ export default function ResourcesPage() {
         }}
       />
 
-      <section className="relative mx-auto mt-2 max-w-6xl">
-        <div
-          className="flex transition-transform duration-300"
-          style={{
-            transform: `translateX(-${index * 100}%)`,
-            width: `${pages.length * 100}%`,
-          }}
-        >
-          {pages.map((page, pi) => (
-            <div key={pi} className="w-full shrink-0 px-2 md:px-4">
-              <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
-                {page.map((it, i) =>
-                  it.id === "__add__" ? (
-                    <AddNewCard
-                      key={`add-${i}`}
-                      onClick={() => setCreateOpen(true)}
-                      label={
-                        view === "Background"
-                          ? "Add New Background"
-                          : view === "Map"
-                          ? "Add New Map"
-                          : "Add New Resource"
-                      }
-                    />
-                  ) : (
-                    <ResourceCard
-                      key={`${it.id}-${i}`}
-                      it={it}
-                      onOpen={handleOpen}
-                    />
-                  )
-                )}
+        {/** 轨道宽 N×100%，每个页宽 = 100% / N，位移步长 = 100% / N*/}
+      <section className="relative mx-auto mt-0 max-w-6xl ">
+        {/* 这个 wrapper 专门用来裁剪轨道溢出 */}
+        <div className="overflow-hidden">
+          <div
+            className="flex transition-transform duration-300"
+            style={{
+              transform: `translateX(-${pages.length > 0 ? (index * 100) / pages.length : 0}%)`,
+              width: `${Math.max(pages.length, 1) * 100}%`,
+            }}
+          >
+            {pages.map((page, pi) => (
+              <div key={pi} 
+              className="shrink-0 px-2 md:px-4"
+              style={{ width: `${100 / Math.max(pages.length, 1)}%` }}>
+                <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+                  {page.map((it, i) =>
+                    it.id === "__add__" ? (
+                      <AddNewCard
+                        key={`add-${i}`}
+                        onClick={() => setCreateOpen(true)}
+                        label={
+                          view === "Background"
+                            ? "Add New Background"
+                            : view === "Map"
+                            ? "Add New Map"
+                            : "Add New Resource"
+                        }
+                      />
+                    ) : (
+                      <ResourceCard
+                        key={`${it.id}-${i}`}
+                        it={it}
+                        onOpen={handleOpen}
+                      />
+                    )
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
-
+        
         {index > 0 && (
           <Button
             aria-label="Prev"

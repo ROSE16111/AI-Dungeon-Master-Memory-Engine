@@ -10,7 +10,8 @@
 - framework: React+Tailwind+shadcn/ui
 - components:`npx shadcn@latest add avatar separator button card input label tabs dialog textarea sheet`
 - icon lib: lucide-react
-- ollama
+- ollama: https://ollama.com
+- analyse: `npm i mammoth pdf-parse`
 ## cmd
 
 `pwd` check current
@@ -175,12 +176,11 @@ npm error [error] not ok
 npm error A complete log of this run can be found in: C:\Users\26988\AppData\Local\npm-cache\_logs\2025-08-26T03_54_28_308Z-debug-0.log
 node:internal/modules/cjs/loader:1368
   throw err;
-  ^
 
-Error: Cannot find module 'D:\document\UQ\4DECO3801\project\AI-Dungeon-Master-Memory-Engine\dungeon-scribe\node_modules\prisma\build\index.js'
+Error: Cannot find module 'D:\document\UQ\4DECO3801\project\AI-Dungeon-Master-Memory-Engine\dungeon-scribe\node_modules\prisma\build\index.js' 
 ```
-
-- method: 先装 nvm-windows，再切到 Node 20
+```
+* method: 先装 nvm-windows，再切到 Node 20
 
 ```
 winget install -e --id CoreyButler.NVMforWindows
@@ -191,8 +191,9 @@ node -v   # 应该是 v20.18.0
 
 power shell 管理员打开：
 cd D:\document\UQ\4DECO3801\project\AI-Dungeon-Master-Memory-Engine
-
-# 优先用 cmd 语法从父目录删
+```
+* 优先用 cmd 语法从父目录删
+```
 cmd /c rmdir /s /q dungeon-scribe\node_modules
 
 cd dungeon-scribe
@@ -224,15 +225,14 @@ API 放在 src/app/api/<name>/route.ts 的文件，会变成一个服务器接�
 1. `prisma/schema.prisma` database code
 2. 生成客户端并建表
 
-```
   npx prisma generate
   npx prisma migrate dev --name init
-```
 
-3. 新建 Prisma 客户端工具
+
+1. 新建 Prisma 客户端工具
    新建文件：src/lib/prisma.ts
 
-4. 新建后端 API 路由
+2. 新建后端 API 路由
    (1) 文本分析并保存：POST /api/analyze
 
 新建文件：src/app/api/analyze/route.ts
