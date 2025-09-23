@@ -290,10 +290,54 @@ function ParchmentBackground() {
   );
 }
 
-/**======= Component4: Sessions 里的白卡片（保持不变） */
+/**======= Component4: Sessions 里的白卡片（右上角加下载按钮） */
+/**======= Component4: Sessions 里的白卡片（下载 .txt：标题+日期+Summary） */
 function CardOnPaper() {
   const PAPER_TOP = "30vh";
   const PAPER_W = "60vw";
+
+  // —— 文案：标题 / 日期 / Summary（显示与下载共用同一份） ——
+  const title = "Forest Adventure";
+  const date  = "10th/Aug 2025";
+  const summaryText = `
+The adventurers gathered at the gates of the Forgotten Forest, answering
+the call of a troubled village. Rumors spoke of strange lights among
+the trees and whispers of a long-lost kingdom hidden beneath the roots
+of ancient oaks.
+
+As they pressed deeper, the party encountered goblin scouts. The battle
+was fierce, yet through clever tactics and teamwork, the heroes prevailed.
+Along the way, they uncovered fragments of ruined stone walls, etched
+with symbols that none could fully decipher.
+
+Deeper inside, an abandoned shrine revealed an ominous prophecy about a
+slumbering dragon whose awakening would bring fire and ruin to the realm.
+Though unsettled, the group pressed onward, determined to uncover the truth.
+
+Nightfall found them resting near a broken watchtower, where an old
+hermit warned them: "The mountain does not forgive the careless, and
+the dragon remembers all who trespass." His words left a chill in the
+adventurers’ hearts.
+
+The session ended with the party gazing at the looming mountains in the
+distance, where a faint red glow pulsed in the night sky — a sign that
+the dragon’s lair awaited them, and that their greatest trial had only
+just begun.
+`.trim(); // 去掉首尾空行
+
+  // —— 点击下载：导出为 .txt（UTF-8） ——
+  const downloadSummary = () => {
+    const content = `${title}\n${date}\n\n${summaryText}\n`;
+    const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${title.replace(/\s+/g, "_")}.txt`; // 文件名：Forest_Adventure.txt
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <div
@@ -308,18 +352,27 @@ function CardOnPaper() {
       }}
     >
       <div className="w-full bg-[#F5F5F5] border border-[#E9E9E9] rounded-[20px] shadow-lg relative p-6 md:p-8">
+        {/* 下载按钮（右上角） */}
+        <button
+          className="absolute top-4 right-4 p-2 rounded-md hover:bg-black/10 active:scale-95 transition cursor-pointer"
+          onClick={downloadSummary}
+          aria-label="Download summary as .txt"
+          title="Download summary"
+        >
+          <img src="/download.png" alt="download" width={24} height={24} />
+        </button>
+
         <div className="flex gap-4 md:gap-6">
           <div
             className="overflow-hidden rounded-[18px] border border-white/50 shadow shrink-0"
             style={{ width: 180, height: 180, background: "#00000010" }}
           >
-            <Image
+            <img
               src="/Griff.png"
               alt="cover"
               width={180}
               height={180}
               className="object-cover w-full h-full"
-              priority
             />
           </div>
 
@@ -332,7 +385,7 @@ function CardOnPaper() {
                 lineHeight: "1.2",
               }}
             >
-              Forest Adventure
+              {title}
             </div>
             <div
               style={{
@@ -342,20 +395,37 @@ function CardOnPaper() {
                 fontFamily: "Adamina, serif",
               }}
             >
-              10th/Aug 2025
+              {date}
             </div>
           </div>
         </div>
 
+        {/* 文字总结，可滚动（高度略缩） */}
         <div className="mt-6">
-          <div className="relative w-full" style={{ minHeight: 260 }}>
-            <Image
-              src="/summary.png"
-              alt="main"
-              fill
-              className="object-contain"
-              priority
-            />
+          <div
+            className="relative w-full"
+            style={{
+              minHeight: 220,
+              maxHeight: 240, // 更紧凑；超出出现滚动条
+              background: "#f0f0f0",
+              border: "2px dashed #ccc",
+              borderRadius: "12px",
+              padding: "20px",
+              textAlign: "left",
+              overflowY: "auto",
+            }}
+          >
+            <span
+              style={{
+                color: "#333",
+                fontFamily: '"Inter", sans-serif',
+                fontSize: 16,
+                lineHeight: "1.6",
+                whiteSpace: "pre-line",
+              }}
+            >
+              {summaryText}
+            </span>
           </div>
         </div>
       </div>
