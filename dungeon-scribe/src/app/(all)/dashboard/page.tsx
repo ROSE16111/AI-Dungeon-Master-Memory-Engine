@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useTranscript } from "../../context/TranscriptContext";
+import { ragIngestTranscript } from "@/lib/ragClient";
 
 
 // size
@@ -100,6 +101,23 @@ function UploadModal({ onClose, campaignTitle }: { onClose: () => void; campaign
         setSummary(data.summary);
       } else {
         setSummary("• 没有生成摘要，请检查模型配置。");
+      }
+      // ADDED BY JESS COMMENT OUT IF CAUSING ISSUES
+      if (data.text?.trim()) {
+        const idPrefix = `${campaignTitle || "upload"}:${file.name.replace(/\W+/g, "_")}:${Date.now()}`;
+        await ragIngestTranscript({
+          idPrefix,
+          text: data.text,
+          metadata: {
+            source: "upload",
+            filename: file.name,
+            campaignTitle,
+            createdAt: new Date().toISOString(),
+          },
+        });
+        // optional: toast("Transcript indexed")
+      } else {
+        console.warn("No transcript text returned from /api/upload");
       }
       router.push("/dashboard/record");
       setSubmitState("submitted");

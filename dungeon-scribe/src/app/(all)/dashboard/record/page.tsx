@@ -9,6 +9,7 @@ import {
 } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { useTranscript } from "../../../context/TranscriptContext";
+import { ragAnswer } from "@/lib/ragClient";
 type CharItem = { name: string; img: string; details: string };
 
 // lock <body>
@@ -921,30 +922,77 @@ function SessionsInsidePaper({
 function ChatWidget() {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  // 固定初始位置：56,106（每次打开/刷新都一样）
   useEffect(() => {
     if (wrapRef.current) {
-      wrapRef.current.style.left = '56px';
-      wrapRef.current.style.top = '96px';
+      wrapRef.current.style.left = "56px";
+      wrapRef.current.style.top = "96px";
     }
   }, []);
 
   const onOpen = () => setOpen(true);
   const onClose = () => setOpen(false);
 
+  async function sendMessage(val: string) {
+    if (!val.trim() || busy) return;
+    setBusy(true);
+
+    const list = listRef.current!;
+    // append user bubble
+    {
+      const mine = document.createElement("div");
+      mine.className = "mb-3 flex justify-end";
+      mine.innerHTML = `<div class="max-w-[80%] rounded-2xl px-4 py-3 bg-gray-200 text-gray-900">${escapeHtml(
+        val
+      )}</div>`;
+      list.appendChild(mine);
+      list.scrollTop = list.scrollHeight;
+    }
+
+    try {
+    const { answer } = await ragAnswer({
+      question: val,
+      topK: 5,
+      where: { type: "raw" }, // important
+    });
+
+      const bot = document.createElement("div");
+      bot.className = "mb-3";
+      bot.innerHTML = `<div class="max-w-[80%] rounded-2xl px-4 py-3 text-white bg-violet-800 whitespace-pre-wrap">${escapeHtml(
+        answer || "[no answer]"
+      )}</div>`;
+      list.appendChild(bot);
+      list.scrollTop = list.scrollHeight;
+    } catch (err: any) {
+      const bot = document.createElement("div");
+      bot.className = "mb-3";
+      bot.innerHTML = `<div class="max-w-[80%] rounded-2xl px-4 py-3 text-white bg-rose-600">Error: ${escapeHtml(
+        err?.message || "RAG failed"
+      )}</div>`;
+      list.appendChild(bot);
+      list.scrollTop = list.scrollHeight;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function onInputKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key !== "Enter") return;
+    const inputEl = e.currentTarget as HTMLInputElement;
+    const val = inputEl.value.trim();
+    if (!val) return;
+    inputEl.value = "";
+    void sendMessage(val);
+  }
+
   return (
     <div
       ref={wrapRef}
       className="fixed z-[9999] select-none"
-      style={{
-        left: 56,
-        top: 106,
-        width: open ? 360 : 60,
-        height: open ? 520 : 60,
-      }}
+      style={{ left: 56, top: 106, width: open ? 360 : 60, height: open ? 520 : 60 }}
     >
-      {/* 折叠状态：只显示圆形按钮 */}
       {!open && (
         <button
           aria-label="Open Chat"
@@ -953,18 +1001,12 @@ function ChatWidget() {
           title="Chat"
           type="button"
         >
-          <img
-            src="/chatbox.png"
-            alt="chatbot"
-            className="w-10 h-10 object-contain"
-          />
+          <img src="/chatbox.png" alt="chatbot" className="w-10 h-10 object-contain" />
         </button>
       )}
 
-      {/* 展开状态 */}
       {open && (
         <section className="w-[360px] h-[520px] bg-white rounded-[22px] shadow-2xl grid grid-rows-[auto_1fr_auto] overflow-hidden">
-          {/* 顶栏 */}
           <header className="bg-indigo-600 text-white px-3 py-3 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <div className="h-9 w-9 rounded-full bg-white/20 grid place-items-center overflow-hidden">
@@ -974,7 +1016,7 @@ function ChatWidget() {
                 <div className="font-semibold">Assistant</div>
                 <div className="text-xs opacity-90 flex items-center gap-1">
                   <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_0_3px_rgba(16,185,129,.25)]"></span>
-                  Online
+                  {busy ? "Thinking…" : "Online"}
                 </div>
               </div>
             </div>
@@ -985,20 +1027,14 @@ function ChatWidget() {
               title="Minimize"
               type="button"
             >
-              <svg
-                viewBox="0 0 24 24"
-                className="w-4 h-4"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-              >
+              <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M5 12h14"></path>
               </svg>
             </button>
           </header>
 
-          {/* 消息区 */}
-          <div className="overflow-auto px-3 py-3 bg-slate-50">
+          {/* messages */}
+          <div className="overflow-auto px-3 py-3 bg-slate-50" ref={listRef}>
             <div className="mb-3">
               <div className="max-w-[80%] rounded-2xl px-4 py-3 text-white bg-violet-800">
                 Hi! Ask me anything.
@@ -1006,63 +1042,26 @@ function ChatWidget() {
             </div>
           </div>
 
-          {/* 输入区 —— 修正：深色文字可见 */}
+          {/* input */}
           <div className="px-3 pb-3">
             <div className="flex gap-2">
               <input
                 className="flex-1 border rounded-xl px-3 h-11 outline-none text-gray-900 placeholder-gray-400 caret-gray-900"
                 placeholder="Type your message here..."
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    const val = (e.target as HTMLInputElement).value.trim();
-                    if (!val) return;
-
-                    const inputEl = e.target as HTMLInputElement;
-                    const list = (e.currentTarget as HTMLElement)
-                      .closest('section')!
-                      .querySelector('.overflow-auto') as HTMLDivElement;
-
-                    // 添加用户消息
-                    const mine = document.createElement('div');
-                    mine.className = 'mb-3 flex justify-end';
-                    mine.innerHTML = `<div class="max-w-[80%] rounded-2xl px-4 py-3 bg-gray-200 text-gray-900">${val}</div>`;
-                    list.appendChild(mine);
-                    inputEl.value = '';
-                    list.scrollTop = list.scrollHeight;
-
-                    // 模拟回复
-                    setTimeout(() => {
-                      const bot = document.createElement('div');
-                      bot.className = 'mb-3';
-                      bot.innerHTML = `<div class="max-w-[80%] rounded-2xl px-4 py-3 text-white bg-violet-800">Got it: ${val}</div>`;
-                      list.appendChild(bot);
-                      list.scrollTop = list.scrollHeight;
-                    }, 200);
-                  }
-                }}
+                onKeyDown={onInputKeyDown}
+                disabled={busy}
               />
               <button
-                className="h-11 w-11 rounded-xl bg-indigo-600 text-white grid place-items-center"
+                className="h-11 w-11 rounded-xl bg-indigo-600 text-white grid place-items-center disabled:opacity-60"
                 onClick={(e) => {
-                  const input = e.currentTarget
-                    .previousSibling as HTMLInputElement;
-                  input.dispatchEvent(
-                    new KeyboardEvent('keydown', {
-                      key: 'Enter',
-                      bubbles: true,
-                    })
-                  );
+                  const input = (e.currentTarget.previousSibling as HTMLInputElement)!;
+                  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
                 }}
                 aria-label="Send"
                 type="button"
+                disabled={busy}
               >
-                <svg
-                  viewBox="0 0 24 24"
-                  className="w-5 h-5"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                >
+                <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M22 2L11 13"></path>
                   <path d="M22 2L15 22L11 13L2 9L22 2Z"></path>
                 </svg>
@@ -1075,7 +1074,10 @@ function ChatWidget() {
   );
 }
 
-
+// simple HTML escaper for safety
+function escapeHtml(s: string) {
+  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
+}
 
 export default function RecordPage() {
   useLockBodyScroll();
