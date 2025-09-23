@@ -52,28 +52,23 @@ enum SummaryType {
 }
 
 // resources-------------------------------------------------------------------
-model Resource {
-  id         String           @id @default(uuid())
-  title      String
-  category   ResourceCategory
-  fileUrl    String // 存放到 /public/uploads 下后，对外可访问的 URL（如 /uploads/xxx.png）
-  previewUrl String? // 可选：缩略图/预览图（没有就复用 fileUrl）
-  createdAt  DateTime         @default(now())
-  updatedAt  DateTime         @updatedAt
-
-  // 挂到当前campaign
-  campaignId String
-  campaign   Campaign @relation(fields: [campaignId], references: [id])
-}
-
 enum ResourceCategory {
   Map
   Background
   Others
 }
 
-
-
+model Resource {
+  id         String            @id @default(uuid())
+  title      String
+  category   ResourceCategory  // ← 改成枚举
+  fileUrl    String
+  previewUrl String?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+  campaignId String
+  campaign   Campaign          @relation(fields: [campaignId], references: [id])
+}
 
 
 //model Session {

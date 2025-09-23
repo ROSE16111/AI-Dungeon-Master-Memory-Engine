@@ -12,6 +12,7 @@
 - icon lib: lucide-react
 - ollama: https://ollama.com
 - analyse: `npm i mammoth pdf-parse`
+
 ## cmd
 
 `pwd` check current
@@ -177,23 +178,27 @@ npm error A complete log of this run can be found in: C:\Users\26988\AppData\Loc
 node:internal/modules/cjs/loader:1368
   throw err;
 
-Error: Cannot find module 'D:\document\UQ\4DECO3801\project\AI-Dungeon-Master-Memory-Engine\dungeon-scribe\node_modules\prisma\build\index.js' 
+Error: Cannot find module 'D:\document\UQ\4DECO3801\project\AI-Dungeon-Master-Memory-Engine\dungeon-scribe\node_modules\prisma\build\index.js'
 ```
+
 ```
 * method: 先装 nvm-windows，再切到 Node 20
 
 ```
+
 winget install -e --id CoreyButler.NVMforWindows
 nvm version
 nvm install 20.18.0
 nvm use 20.18.0
-node -v   # 应该是 v20.18.0
+node -v # 应该是 v20.18.0
 
 power shell 管理员打开：
 cd D:\document\UQ\4DECO3801\project\AI-Dungeon-Master-Memory-Engine
+
 ```
 * 优先用 cmd 语法从父目录删
 ```
+
 cmd /c rmdir /s /q dungeon-scribe\node_modules
 
 cd dungeon-scribe
@@ -226,7 +231,7 @@ API 放在 src/app/api/<name>/route.ts 的文件，会变成一个服务器接�
 2. 生成客户端并建表
 
   npx prisma generate
-  npx prisma migrate dev --name init
+  npx prisma migrate dev --name addResources
 
 
 1. 新建 Prisma 客户端工具
@@ -279,13 +284,15 @@ SSR 时也能拿到；
 request: app/api/**current-campaign**/route.ts
 
 ```
+
 res.cookies.set("currentCampaignId", id, {
-  path: "/",
-  httpOnly: true,
-  sameSite: "lax",
-  secure: process.env.NODE_ENV === "production",
-  maxAge: remember ? 60 * 60 * 24 * 30 : undefined,
+path: "/",
+httpOnly: true,
+sameSite: "lax",
+secure: process.env.NODE_ENV === "production",
+maxAge: remember ? 60 _ 60 _ 24 \* 30 : undefined,
 });
+
 ```
 
 Cookie 的 HttpOnly 让它只能在服务器端读，客户端用一个 GET 接口“转述”给页面就行
@@ -312,17 +319,24 @@ npm install tesseract.js pdf-parse pdf2pic mammoth node-fetch
 `Copy-Item .\dungeon-scribe\prisma\dev.db .\dungeon-scribe\prisma\dev.local.backup.db`
 保留你本地的 dev.db 文件，但从 Git 索引里去掉它；之后 .gitignore 的规则才会生效
 ```
+
 # 把冲突文件从索引里移除（工作区文件会保留）
+
 git rm --cached -f "dungeon-scribe/prisma/dev.db"
 
 # 标记冲突已解决并完成这次合并
+
 git commit -m "Resolve merge: stop tracking prisma/dev.db"
 
-# 确保 .gitignore 已包含：**/prisma/*.db 和 **/prisma/*.db-journal
+# 确保 .gitignore 已包含：**/prisma/\*.db 和 **/prisma/\*.db-journal
+
 git add .gitignore
-git commit -m "Ensure prisma db files are ignored"  # 如果有改动
+git commit -m "Ensure prisma db files are ignored" # 如果有改动
 
 # 推送
+
 git push
+
+```
 
 ```

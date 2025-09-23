@@ -318,19 +318,27 @@ export default function ResourcesPage() {
           subtitle: "View Details",
           img: r.previewUrl || r.fileUrl || "/historypp.png",
           tag: r.category, // 右上角小 Badge
-          category: view,  // 这里用当前 Tab 作为前端分类（也可按 r.category 严格映射）
+          category: view, // 这里用当前 Tab 作为前端分类（也可按 r.category 严格映射）
           fileUrl: r.fileUrl,
         }));
 
         setItems(arr);
         setIndex(0); // 切换 Tab 回到第一页
-      } catch (err) {
+      } catch (err: any) {
+        // ✅ 忽略开发模式下的 AbortError
+        if (err?.name === "AbortError") return;
         console.error(err);
-        setItems([]); // 出错时清空，避免残留
+        setItems([]);
       }
     })();
 
-    return () => controller.abort();
+    return () => {
+      try {
+        if (!controller.signal.aborted) controller.abort();
+      } catch {
+        // ignore
+      }
+    };
   }, [view]);
 
   // ---------------------- 分页切片（6/页） ----------------------
@@ -397,7 +405,12 @@ export default function ResourcesPage() {
         title: createName.trim(),
         subtitle: "View Details",
         img: json.preview || "/historypp.png",
-        tag: view === "Background" ? "Background" : view === "Map" ? "Map" : "Others",
+        tag:
+          view === "Background"
+            ? "Background"
+            : view === "Map"
+            ? "Map"
+            : "Others",
         category: view,
         fileUrl: json.url,
       };
