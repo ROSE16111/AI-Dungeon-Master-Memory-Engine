@@ -113,6 +113,7 @@ npx prisma migrate dev --name init
 * 生成Prisma Client : 
     1. `cd dungeon-scribe`
     2. `npx prisma generate`
+    3. `npx prisma db seed`
 * 建表
 ```
 npx prisma migrate dev -n init
@@ -148,7 +149,12 @@ git commit -m "chore(prisma): stop tracking local SQLite dev.db; ignore db files
 git push
 
 ```
-
+### seed config
+* 用 tsx 跑 ESM: `npm i -D tsx`
+* "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  }
+###
 拉完代码后，每个人本地
 ```
 # 如果仓库有 migrations（通常有）
@@ -161,13 +167,32 @@ npx prisma migrate reset   # 会清空并按迁移重建，开发环境用这个
 npx prisma studio
 
 ```
+### 数据库使用
+1. 保存 schema.prisma，先格式化确认无语法问题
+`npx prisma format`
+2. 生成并应用迁移（推荐 dev，不会清空数据；如果想清库就用 reset）
+```
+# 生成一条新迁移并应用
+`npx prisma migrate dev --name add_resource_model`
 
+# 或者全部清空重建（会丢数据）
+`npx prisma migrate reset`
+
+
+#
+import { prisma } from '@/lib/prisma';
+
+export async function GET() {
+  const rows = await prisma.resource.findMany();
+  return NextResponse.json({ items: rows });
+}
+```
 
 ## resources
 ### function
 * 展示“资源库”的卡片列表
 * 顶部筛选 Map / Background / Others 三个类别
-* 分页横滑：每页最多 6 张卡，页码点和 ←/→ 键盘控制。
+* transition滑轨: 分页横滑：每页最多 6 张卡，页码点和 ←/→ 键盘控制。
 * “AddNewCard” 弹窗：输入名称+选择文件，POST /api/resources 上传，成功后把新卡加到本地状态
 * “Open” 按钮：不是导航，而是在页面内弹出一个浮层，去 /api/readFile?id=... 拉取文本内容并展示（PDF/图片之类目前会按文本处理）
 ### logic
@@ -175,7 +200,7 @@ npx prisma studio
   * data = items.filter(it => it.category === view)
   * 选择器变化 → setView(v) 并 setIndex(0) 回第一页。
 * 分页逻辑
-  * pages = chunk(data, 6)，且第一页在末尾强行插入一个 id: "__add__" 的“虚拟卡片”用来显示 AddNewCard（最多 6 张，且只在第一页插入）。
+  * pages = chunk(data, 6)，在末尾强行插入一个 id: "__add__" 的“虚拟卡片”用来显示 AddNewCard。
   * 左右翻页：go(-1|1) 或键盘 ArrowLeft/ArrowRight
 * 卡片渲染
   * ResourceCard: 展示数据 + 两个按钮
@@ -189,8 +214,8 @@ npx prisma studio
   * 失败则显示 (Failed to load content) 或后端返回的 error
 * Add New（创建新资源）
   * 打开 Dialog → 填名字、选文件。
-  * handleCreate()：
-  * POST /api/resources，FormData：name, category, file
-  * 预期返回 { id, url, preview? }
-  * 用这个返回加一条新卡到 items 中（并设置 fileUrl = url 提供下载/打开）
-  * 关闭弹窗，清空输入
+  * handleCreate(); dungeon-scribe/src/app/api/resources/route.ts
+    * POST /api/resources，FormData：name, category, file
+    * 预期返回 { id, url, preview? }
+    * 用这个返回加一条新卡到 items 中（并设置 fileUrl = url 提供下载/打开）
+    * 关闭弹窗，清空输入

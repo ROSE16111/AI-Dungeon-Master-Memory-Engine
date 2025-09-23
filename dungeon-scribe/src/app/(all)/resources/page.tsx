@@ -8,6 +8,7 @@ data：示例里用 MOCK_SESSIONS 和 MOCK_CHARACTERS 两套数据；接入后�
 
 Add New：点击后弹出 Dialog；handleCreate 留了 TODO，按你现有 /api/data 的写法对接就行
 */
+
 "use client";
 import Image from "next/image";
 import Link from "next/link";
@@ -155,7 +156,7 @@ function TitleWithFilter({
   );
 }
 
-/* ------------------------------------ data ------------------------------------ */
+/* ------------------------------------ data types ------------------------------------ */
 type Category = "Map" | "Background" | "Others";
 type CardItem = {
   id: string;
@@ -167,57 +168,6 @@ type CardItem = {
   /* ✅ 新增：上传后返回的原文件 URL，用于 View Details / Open / download */
   fileUrl?: string;
 };
-
-const MOCK_RESOURCES: CardItem[] = [
-  {
-    id: "bg-1",
-    title: "Baldur's Gate",
-    subtitle: "View Details",
-    img: "/historypp.png",
-    tag: "Background",
-    category: "Background",
-  },
-  {
-    id: "bg-2",
-    title: "Forest Adventure",
-    subtitle: "View Details",
-    img: "/historypp.png",
-    tag: "Background",
-    category: "Background",
-  },
-  {
-    id: "bg-3",
-    title: "Ancient Ruins",
-    subtitle: "View Details",
-    img: "/historypp.png",
-    tag: "Background",
-    category: "Background",
-  },
-  {
-    id: "map-1",
-    title: "Northern Valley",
-    subtitle: "Region Map",
-    img: "/historypp.png",
-    tag: "Map",
-    category: "Map",
-  },
-  {
-    id: "item-1",
-    title: "Moonblade",
-    subtitle: "Legendary Sword",
-    img: "/historypp.png",
-    tag: "Item",
-    category: "Others",
-  },
-  {
-    id: "npc-1",
-    title: "Eldrin the Wise",
-    subtitle: "Archmage • LVL 9",
-    img: "/historypp.png",
-    tag: "NPC",
-    category: "Others",
-  },
-];
 
 /* --------------------------------- small pieces -------------------------------- */
 function ResourceCard({
@@ -233,7 +183,8 @@ function ResourceCard({
   return (
     <Card className="overflow-hidden rounded-2xl bg-white/90 backdrop-blur">
       <CardHeader className="p-0">
-        <div className="relative h-33 w-full">
+        {/* 注意：Tailwind 默认没有 h-33，这里用 h-36，否则会塌陷/报未知类名 */}
+        <div className="relative h-36 w-full">
           <Image
             src={it.img}
             alt={it.title}
@@ -322,50 +273,99 @@ export default function ResourcesPage() {
   // 你的文件上传 & 列表逻辑保留
   const [createFile, setCreateFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
-  const [items, setItems] = useState<CardItem[]>(MOCK_RESOURCES);
+
+  // ✅ 用后端数据（不要再用 MOCK_RESOURCES，以免状态打架）
+  const [items, setItems] = useState<CardItem[]>([]);
 
   /* ✅ 新增：用于 Open 弹层的状态 */
   const [selectedItem, setSelectedItem] = useState<CardItem | null>(null);
   const [selectedContent, setSelectedContent] = useState<string>("");
 
-  /* 原有：按分类过滤 */
+  /* 原有：按分类过滤（基于当前 tab） */
   const data = useMemo(
     () => items.filter((it) => it.category === view),
     [items, view]
   );
 
+  // ---------------------- 接入后端：拉取资源列表 ----------------------
+  // 拉取当前 Tab 的资源；切换 Tab 时重新拉。
+  useEffect(() => {
+    const controller = new AbortController();
 
-// add card 在最后
-// 先得到一个“最终列表”：所有资源 + 末尾的 Add 卡片
-const listWithAdd = useMemo(() => {
-  const list = [...data];
-  list.push({
-    id: "__add__",
-    title: "",
-    img: "",
-    category: view,
-  } as CardItem);
-  return list;
-}, [data, view]);
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/resources?category=${encodeURIComponent(view)}`,
+          { cache: "no-store", signal: controller.signal }
+        );
+        if (!res.ok) throw new Error(`fetch list: ${res.status}`);
 
-// 再把它按 6 个一页切片
-const pages: CardItem[][] = useMemo(() => {
-  const len = listWithAdd.length;
-  const pageCount = Math.ceil(len / 6);
-  return Array.from({ length: pageCount }, (_, i) =>
-    listWithAdd.slice(i * 6, i * 6 + 6)
-  );
-}, [listWithAdd]);
+        const json: {
+          ok: boolean;
+          items: Array<{
+            id: string;
+            title: string;
+            category: string;
+            fileUrl: string;
+            previewUrl?: string;
+          }>;
+        } = await res.json();
 
-//页面保护
-useEffect(() => {
-  setIndex((i) => Math.min(i, Math.max(0, pages.length - 1)));
-}, [pages.length]);
+        // 后端记录映射到前端 CardItem
+        const arr: CardItem[] = (json.items || []).map((r) => ({
+          id: r.id,
+          title: r.title,
+          subtitle: "View Details",
+          img: r.previewUrl || r.fileUrl || "/historypp.png",
+          tag: r.category, // 右上角小 Badge
+          category: view,  // 这里用当前 Tab 作为前端分类（也可按 r.category 严格映射）
+          fileUrl: r.fileUrl,
+        }));
 
+        setItems(arr);
+        setIndex(0); // 切换 Tab 回到第一页
+      } catch (err) {
+        console.error(err);
+        setItems([]); // 出错时清空，避免残留
+      }
+    })();
+
+    return () => controller.abort();
+  }, [view]);
+
+  // ---------------------- 分页切片（6/页） ----------------------
+  // 先得到一个“最终列表”：所有资源 + 末尾的 Add 卡片
+  const listWithAdd = useMemo(() => {
+    const list = [...data];
+    list.push({
+      id: "__add__",
+      title: "",
+      img: "",
+      category: view,
+    } as CardItem);
+    return list;
+  }, [data, view]);
+
+  // 再把它按 6 个一页切片
+  const pages: CardItem[][] = useMemo(() => {
+    const len = listWithAdd.length;
+    const pageCount = Math.ceil(len / 6);
+    return Array.from({ length: pageCount }, (_, i) =>
+      listWithAdd.slice(i * 6, i * 6 + 6)
+    );
+  }, [listWithAdd]);
+
+  // 页面保护（避免因页数变化出现越界）
   const [index, setIndex] = useState(0);
+  useEffect(() => {
+    setIndex((i) => Math.min(i, Math.max(0, pages.length - 1)));
+  }, [pages.length]);
+
   const max = Math.max(0, pages.length - 1);
   const go = (dir: -1 | 1) =>
     setIndex((i) => Math.min(max, Math.max(0, i + dir)));
+
+  // keyboard ←/→ 也能控制。
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "ArrowLeft") go(-1);
@@ -391,22 +391,18 @@ useEffect(() => {
       const json: { id: string; url: string; preview?: string } =
         await res.json();
 
+      // ✅ 乐观更新（也可以选择重新 GET 一次最新列表）
       const newItem: CardItem = {
         id: json.id || `${view}-${Date.now()}`,
         title: createName.trim(),
         subtitle: "View Details",
         img: json.preview || "/historypp.png",
-        tag:
-          view === "Background"
-            ? "Background"
-            : view === "Map"
-            ? "Map"
-            : "Others",
+        tag: view === "Background" ? "Background" : view === "Map" ? "Map" : "Others",
         category: view,
         fileUrl: json.url,
       };
+      setItems((prev) => [...prev, newItem]);
 
-      setItems((prev) => [...prev, newItem]); // ✅ 这行就是“Add New Card”的关键，没动
       setCreateOpen(false);
       setCreateName("");
       setCreateFile(null);
@@ -425,16 +421,12 @@ useEffect(() => {
     return fileName ? `/uploads/${fileName}` : "";
   }
 
+  // Open：弹出浮层并读取文件文本（你的 /api/readFile 写法保持不变）
   async function handleOpen(item: CardItem) {
-    console.log("[handleOpen] raw fileUrl =", item.fileUrl);
-
     setSelectedItem({ ...item });
     setSelectedContent("(Loading...)");
 
-    // ✅ 无论传什么，强制映射到 /uploads/文件名
     const safeUrl = normalizeToUploadsUrl(item.fileUrl || item.id);
-    console.log("[handleOpen] normalized id =", safeUrl);
-
     if (!safeUrl) {
       setSelectedContent("(No file available)");
       return;
@@ -443,9 +435,7 @@ useEffect(() => {
     try {
       const res = await fetch(
         `/api/readFile?id=${encodeURIComponent(safeUrl)}`,
-        {
-          cache: "no-store",
-        }
+        { cache: "no-store" }
       );
       const json = await res.json().catch(() => ({} as any));
 
@@ -474,21 +464,25 @@ useEffect(() => {
         }}
       />
 
-        {/** 轨道宽 N×100%，每个页宽 = 100% / N，位移步长 = 100% / N*/}
+      {/** 轨道宽 N×100%，每个页宽 = 100% / N，位移步长 = 100% / N*/}
       <section className="relative mx-auto mt-0 max-w-6xl ">
         {/* 这个 wrapper 专门用来裁剪轨道溢出 */}
         <div className="overflow-hidden">
           <div
             className="flex transition-transform duration-300"
             style={{
-              transform: `translateX(-${pages.length > 0 ? (index * 100) / pages.length : 0}%)`,
+              transform: `translateX(-${
+                pages.length > 0 ? (index * 100) / pages.length : 0
+              }%)`,
               width: `${Math.max(pages.length, 1) * 100}%`,
             }}
           >
             {pages.map((page, pi) => (
-              <div key={pi} 
-              className="shrink-0 px-2 md:px-4"
-              style={{ width: `${100 / Math.max(pages.length, 1)}%` }}>
+              <div
+                key={pi}
+                className="shrink-0 px-2 md:px-4"
+                style={{ width: `${100 / Math.max(pages.length, 1)}%` }}
+              >
                 <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
                   {page.map((it, i) =>
                     it.id === "__add__" ? (
@@ -516,7 +510,7 @@ useEffect(() => {
             ))}
           </div>
         </div>
-        
+
         {index > 0 && (
           <Button
             aria-label="Prev"

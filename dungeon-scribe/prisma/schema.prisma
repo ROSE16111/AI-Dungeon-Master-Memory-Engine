@@ -1,4 +1,3 @@
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -9,55 +8,69 @@ datasource db {
 }
 
 model Campaign {
-  id          String   @id @default(uuid())
-  title       String
-  startDate   DateTime @default(now())
-  updateDate  DateTime @updatedAt
+  id         String   @id @default(uuid())
+  title      String
+  startDate  DateTime @default(now())
+  updateDate DateTime @updatedAt
 
-  roles       Role[]
-  allTxts     AllTxt[]
-  summaries   Summary[]
+  roles     Role[]
+  allTxts   AllTxt[]
+  summaries Summary[]
+  resources Resource[]
 }
 
 model Role {
-  id          String   @id @default(uuid())
-  name        String
-  level       Int
-  campaignId  String
-  campaign    Campaign @relation(fields: [campaignId], references: [id])
+  id         String   @id @default(uuid())
+  name       String
+  level      Int
+  campaignId String
+  campaign   Campaign @relation(fields: [campaignId], references: [id])
 }
 
 model AllTxt {
-  id          String   @id @default(uuid())
-  content     String
-  campaignId  String
-  campaign    Campaign @relation(fields: [campaignId], references: [id])
-  createdAt   DateTime @default(now())
+  id         String   @id @default(uuid())
+  content    String
+  campaignId String
+  campaign   Campaign @relation(fields: [campaignId], references: [id])
+  createdAt  DateTime @default(now())
 }
 
 model Summary {
-  id           String      @id @default(uuid())
-  type         SummaryType
-  content      String
-  createdAt    DateTime    @default(now())
-  roleName     String?
-  campaignId   String
-  imageBase64  String?     
-  campaign     Campaign    @relation(fields: [campaignId], references: [id])
+  id          String      @id @default(uuid())
+  type        SummaryType
+  content     String
+  createdAt   DateTime    @default(now())
+  roleName    String?
+  campaignId  String
+  imageBase64 String?
+  campaign    Campaign    @relation(fields: [campaignId], references: [id])
 }
-
 
 enum SummaryType {
   session
   character
 }
 
+// resources-------------------------------------------------------------------
+model Resource {
+  id         String           @id @default(uuid())
+  title      String
+  category   ResourceCategory
+  fileUrl    String // 存放到 /public/uploads 下后，对外可访问的 URL（如 /uploads/xxx.png）
+  previewUrl String? // 可选：缩略图/预览图（没有就复用 fileUrl）
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
 
+  // 挂到当前campaign
+  campaignId String
+  campaign   Campaign @relation(fields: [campaignId], references: [id])
+}
 
-
-
-
-
+enum ResourceCategory {
+  Map
+  Background
+  Others
+}
 
 
 
