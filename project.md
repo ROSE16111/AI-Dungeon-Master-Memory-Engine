@@ -163,3 +163,34 @@ npx prisma studio
 ```
 
 
+## resources
+### function
+* 展示“资源库”的卡片列表
+* 顶部筛选 Map / Background / Others 三个类别
+* 分页横滑：每页最多 6 张卡，页码点和 ←/→ 键盘控制。
+* “AddNewCard” 弹窗：输入名称+选择文件，POST /api/resources 上传，成功后把新卡加到本地状态
+* “Open” 按钮：不是导航，而是在页面内弹出一个浮层，去 /api/readFile?id=... 拉取文本内容并展示（PDF/图片之类目前会按文本处理）
+### logic
+* 筛选逻辑
+  * data = items.filter(it => it.category === view)
+  * 选择器变化 → setView(v) 并 setIndex(0) 回第一页。
+* 分页逻辑
+  * pages = chunk(data, 6)，且第一页在末尾强行插入一个 id: "__add__" 的“虚拟卡片”用来显示 AddNewCard（最多 6 张，且只在第一页插入）。
+  * 左右翻页：go(-1|1) 或键盘 ArrowLeft/ArrowRight
+* 卡片渲染
+  * ResourceCard: 展示数据 + 两个按钮
+  * Open：调用父组件的 onOpen(it) 打开浮层并加载内容。
+  * download：如果有 fileUrl，就 download；否则跳到站内详情页 /resources/${id}（目前没有这个详情页实现，只是预留 URL）
+* Open 浮层内容加载
+  * 点击 Open → handleOpen(item)：
+  * 先 setSelectedItem(item)、setSelectedContent("(Loading...)" )
+  * 处理 item.fileUrl → normalizeToUploadsUrl()：不管传什么路径，强行只保留文件名并映射到 /uploads/<文件名>（保证走你自己的文件读取接口）
+  * GET /api/readFile?id=/uploads/<文件名> → json.text → setSelectedContent(text)
+  * 失败则显示 (Failed to load content) 或后端返回的 error
+* Add New（创建新资源）
+  * 打开 Dialog → 填名字、选文件。
+  * handleCreate()：
+  * POST /api/resources，FormData：name, category, file
+  * 预期返回 { id, url, preview? }
+  * 用这个返回加一条新卡到 items 中（并设置 fileUrl = url 提供下载/打开）
+  * 关闭弹窗，清空输入

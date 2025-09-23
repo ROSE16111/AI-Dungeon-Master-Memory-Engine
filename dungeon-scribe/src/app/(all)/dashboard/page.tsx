@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useTranscript } from "../../context/TranscriptContext";
+import { ragIngestTranscript } from "@/lib/ragClient";
 
 
 // size
@@ -21,24 +22,20 @@ function wsURL() {
   if (typeof window !== "undefined") {
     const proto = window.location.protocol === "https:" ? "wss" : "ws";
     const host = window.location.hostname;
-    return `${proto}://${host}:8000/audio`;
+  return `${proto}://${host}:8000/audio`;
   }
   return "ws://localhost:8000/audio";
 }
 
 // upload modal
-function UploadModal({ onClose }: { onClose: () => void }) {
+function UploadModal({ onClose, campaignTitle }: { onClose: () => void; campaignTitle: string | null }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [progress, setProgress] = useState(0);
   const [isFileDialogOpen, setIsFileDialogOpen] = useState(false);
-  const [submitState, setSubmitState] = useState<
-    "idle" | "submitting" | "submitted" | "error"
-  >("idle");
-
+  const [submitState, setSubmitState] = useState<"idle" | "submitting" | "submitted" | "error">("idle");
   const { setTranscript, setSummary } = useTranscript();
   const router = useRouter();
-  
 
   const openPicker = useCallback(() => {
     if (!inputRef.current) return;
@@ -56,15 +53,9 @@ function UploadModal({ onClose }: { onClose: () => void }) {
     const f = files[0];
     const ext = f.name.split(".").pop()?.toLowerCase() || "";
     const mime = (f.type || "").toLowerCase();
-
-    // ✅ 修复拼写错误
     const allowedExt = new Set(["txt", "mp3", "m4a", "mp4", "wav", "aac"]);
     const isAllowedByExt = allowedExt.has(ext);
-    const isAllowedByMime =
-      mime.startsWith("audio/") ||
-      mime === "video/mp4" ||
-      mime === "text/plain";
-
+    const isAllowedByMime = mime.startsWith("audio/") || mime === "video/mp4" || mime === "text/plain";
     if (!(isAllowedByExt || isAllowedByMime)) {
       alert("Please upload txt / Mp3 / M4A / Mp4 / Wav / Aac (≤50MB).");
       return;
@@ -78,7 +69,6 @@ function UploadModal({ onClose }: { onClose: () => void }) {
     setSubmitState("idle");
   };
 
-  // progress bar
   useEffect(() => {
     if (!file) return;
     const t = setInterval(() => {
@@ -96,38 +86,39 @@ function UploadModal({ onClose }: { onClose: () => void }) {
   const isDone = progress >= 100;
   const doneBytes = file ? (Math.min(progress, 100) / 100) * file.size : 0;
 
-  // API endpoint
-  const TRANSCRIBE_URL =
-    process.env.NEXT_PUBLIC_TRANSCRIBE_URL || "/api/transcribe";
-
-  // submit
   const handleConfirmSubmit = async () => {
-    if (
-      !file ||
-      !isDone ||
-      submitState === "submitting" ||
-      submitState === "submitted"
-    )
-      return;
-
+    if (!file || !isDone || submitState === "submitting" || submitState === "submitted") return;
     setSubmitState("submitting");
-
     try {
       const fd = new FormData();
       fd.append("file", file);
-
+      fd.append("campaignTitle", campaignTitle ?? "");
       const res = await fetch("/api/upload", { method: "POST", body: fd });
       if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
       const data = await res.json();
-
-      // 更新上下文：原始文字 & 摘要
       if (data.text) setTranscript(data.text);
       if (data.summary) {
         setSummary(data.summary);
       } else {
         setSummary("• 没有生成摘要，请检查模型配置。");
       }
-
+      // ADDED BY JESS COMMENT OUT IF CAUSING ISSUES
+      if (data.text?.trim()) {
+        const idPrefix = `${campaignTitle || "upload"}:${file.name.replace(/\W+/g, "_")}:${Date.now()}`;
+        await ragIngestTranscript({
+          idPrefix,
+          text: data.text,
+          metadata: {
+            source: "upload",
+            filename: file.name,
+            campaignTitle,
+            createdAt: new Date().toISOString(),
+          },
+        });
+        // optional: toast("Transcript indexed")
+      } else {
+        console.warn("No transcript text returned from /api/upload");
+      }
       router.push("/dashboard/record");
       setSubmitState("submitted");
     } catch (e) {
@@ -447,7 +438,7 @@ export default function DashboardPage() {
         </span>
       </div>
 
-      {openUpload && <UploadModal onClose={() => setOpenUpload(false)} />}
+  {openUpload && <UploadModal onClose={() => setOpenUpload(false)} campaignTitle={campaignTitle} />}
     </div>
   );
 }
