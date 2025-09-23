@@ -305,3 +305,24 @@ npm install tesseract.js pdf-parse pdf2pic mammoth node-fetch
 
 还需要本机安装 tesseract-ocr 可执行程序（Windows 需要去下载 Tesseract installer
 并把路径加到环境变量里）
+
+
+
+##
+`Copy-Item .\dungeon-scribe\prisma\dev.db .\dungeon-scribe\prisma\dev.local.backup.db`
+保留你本地的 dev.db 文件，但从 Git 索引里去掉它；之后 .gitignore 的规则才会生效
+```
+# 把冲突文件从索引里移除（工作区文件会保留）
+git rm --cached -f "dungeon-scribe/prisma/dev.db"
+
+# 标记冲突已解决并完成这次合并
+git commit -m "Resolve merge: stop tracking prisma/dev.db"
+
+# 确保 .gitignore 已包含：**/prisma/*.db 和 **/prisma/*.db-journal
+git add .gitignore
+git commit -m "Ensure prisma db files are ignored"  # 如果有改动
+
+# 推送
+git push
+
+```
