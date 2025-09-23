@@ -580,7 +580,7 @@ const CharacterCarouselStacked = forwardRef(function CharacterCarouselStacked(
   );
 });
 
-/* 仅 Sessions 视图使用：羊皮纸“内部”的滚动内容（字幕从纸内出现而不是从网页底部出现）  可连接LLM接口*/
+/* 仅 Sessions 视图使用：羊皮纸“内部”的滚动内容（字幕从纸内出现而不是从网页底部出现）可连接LLM接口*/
 function SessionsInsidePaper({
   searchTerm,
   activeHit,
@@ -925,8 +925,8 @@ function ChatWidget() {
   // 固定初始位置：56,106（每次打开/刷新都一样）
   useEffect(() => {
     if (wrapRef.current) {
-      wrapRef.current.style.left = '56px';
-      wrapRef.current.style.top = '96px';
+      wrapRef.current.style.left = "56px";
+      wrapRef.current.style.top = "96px";
     }
   }, []);
 
@@ -968,7 +968,11 @@ function ChatWidget() {
           <header className="bg-indigo-600 text-white px-3 py-3 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <div className="h-9 w-9 rounded-full bg-white/20 grid place-items-center overflow-hidden">
-                <img src="/chatbox.png" alt="bot" className="w-5 h-5 object-contain" />
+                <img
+                  src="/chatbox.png"
+                  alt="bot"
+                  className="w-5 h-5 object-contain"
+                />
               </div>
               <div className="leading-4">
                 <div className="font-semibold">Assistant</div>
@@ -1013,27 +1017,27 @@ function ChatWidget() {
                 className="flex-1 border rounded-xl px-3 h-11 outline-none text-gray-900 placeholder-gray-400 caret-gray-900"
                 placeholder="Type your message here..."
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
+                  if (e.key === "Enter") {
                     const val = (e.target as HTMLInputElement).value.trim();
                     if (!val) return;
 
                     const inputEl = e.target as HTMLInputElement;
                     const list = (e.currentTarget as HTMLElement)
-                      .closest('section')!
-                      .querySelector('.overflow-auto') as HTMLDivElement;
+                      .closest("section")!
+                      .querySelector(".overflow-auto") as HTMLDivElement;
 
                     // 添加用户消息
-                    const mine = document.createElement('div');
-                    mine.className = 'mb-3 flex justify-end';
+                    const mine = document.createElement("div");
+                    mine.className = "mb-3 flex justify-end";
                     mine.innerHTML = `<div class="max-w-[80%] rounded-2xl px-4 py-3 bg-gray-200 text-gray-900">${val}</div>`;
                     list.appendChild(mine);
-                    inputEl.value = '';
+                    inputEl.value = "";
                     list.scrollTop = list.scrollHeight;
 
                     // 模拟回复
                     setTimeout(() => {
-                      const bot = document.createElement('div');
-                      bot.className = 'mb-3';
+                      const bot = document.createElement("div");
+                      bot.className = "mb-3";
                       bot.innerHTML = `<div class="max-w-[80%] rounded-2xl px-4 py-3 text-white bg-violet-800">Got it: ${val}</div>`;
                       list.appendChild(bot);
                       list.scrollTop = list.scrollHeight;
@@ -1047,8 +1051,8 @@ function ChatWidget() {
                   const input = e.currentTarget
                     .previousSibling as HTMLInputElement;
                   input.dispatchEvent(
-                    new KeyboardEvent('keydown', {
-                      key: 'Enter',
+                    new KeyboardEvent("keydown", {
+                      key: "Enter",
                       bubbles: true,
                     })
                   );
@@ -1074,8 +1078,6 @@ function ChatWidget() {
     </div>
   );
 }
-
-
 
 export default function RecordPage() {
   useLockBodyScroll();
