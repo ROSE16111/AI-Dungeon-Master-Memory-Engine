@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import Image from "next/image";
-import { useRouter } from "next/navigation"; // back 按钮
+import { useRouter, useParams } from "next/navigation"; // back 按钮
 
 /* Adjust parameters */
 const HEADER_H = 88;
@@ -440,33 +440,10 @@ function CharacterCarouselStacked({
 }: {
   searchName?: string;
 }) {
-  const items = [
-    {
-      name: "Griff",
-      img: "/Griff.png",
-      details:
-        "Veteran battle master of the north. Proficiencies: longsword, tactics, leadership.",
-    },
-    {
-      name: "Arwyn",
-      img: "/Griff.png",
-      details:
-        "Elven ranger from the silver woods. Proficiencies: bow, tracking, nature magic.",
-    },
-    {
-      name: "Dorian",
-      img: "/Griff.png",
-      details:
-        "Human warlock with a cryptic pact. Proficiencies: eldritch arts, arcana, deception.",
-    },
-    {
-      name: "Lyra",
-      img: "/Griff.png",
-      details:
-        "Half-elf bard with a silver tongue. Proficiencies: performance, persuasion, rapier.",
-    },
-  ];
-
+  const params = useParams();
+  const [campaignId, setCampaignId] = useState<string | undefined>(undefined);
+  const [items, setItems] = useState<Array<{ name: string; img: string; details: string }>>([]);
+  const [loading, setLoading] = useState(true);
   const [cur, setCur] = useState(0);
   const [direction, setDirection] = useState<"left" | "right">("right");
   const [flippedIndex, setFlippedIndex] = useState<number | null>(null);
@@ -478,13 +455,63 @@ function CharacterCarouselStacked({
     window.setTimeout(() => setHintOn(false), 900);
   };
 
-  const N = items.length;
-  if (N === 0) return null;
+  // On mount, determine campaignId
+  useEffect(() => {
+    let id = params?.id;
+    if (Array.isArray(id)) {
+      id = id[0];
+    }
+    
+    // If URL has template string or no id, use localStorage instead
+    if (!id || id === '${campaignId}' || id === '%24%7BcampaignId%7D') {
+      if (typeof window !== 'undefined') {
+        id = localStorage.getItem('currentCampaignId') || undefined;
+      }
+    }
+    
+    setCampaignId(id as string | undefined);
+  }, [params]);
 
+  // Fetch roles from database
+  useEffect(() => {
+    if (!campaignId) {
+      console.log('No campaignId available, skipping fetch');
+      setLoading(false);
+      return;
+    }
+    console.log('Fetching roles for campaignId:', campaignId);
+    setLoading(true);
+    fetch(`/api/data?type=roles&campaignId=${campaignId}`)
+      .then((res) => {
+        console.log('API response status:', res.status);
+        return res.json();
+      })
+      .then((data) => {
+        console.log('API response data:', data);
+        if (data.roles && Array.isArray(data.roles)) {
+          const processedRoles = data.roles.map((role: any) => {
+            console.log(`Character "${role.name}" image data:`, role.img ? role.img.substring(0, 50) + '...' : 'NO IMAGE');
+            return {
+              name: role.name,
+              img: role.img || "/Griff.png",
+              details: role.details || `Level ${role.level || 1} character. No detailed description available yet.`
+            };
+          });
+          setItems(processedRoles);
+        } else {
+          setItems([]);
+        }
+      })
+      .catch((err) => {
+        console.error('API fetch error:', err);
+        setItems([]);
+      })
+      .finally(() => setLoading(false));
+  }, [campaignId]);
+
+  // Helper functions (always defined)
   const mod = (i: number, m: number) => ((i % m) + m) % m;
-  const idxL = N >= 2 ? mod(cur - 1, N) : cur;
-  const idxR = N >= 3 ? mod(cur + 1, N) : N === 2 ? mod(cur + 1, N) : cur;
-
+  
   const prev = () => {
     setDirection("left");
     setCur((v) => mod(v - 1, N));
@@ -501,17 +528,41 @@ function CharacterCarouselStacked({
     setFlippedIndex(null);
   };
 
-  // 根据搜索词把对应角色切到中间并触发 hint 动画（全名优先，包含匹配兜底）
+  // 根据搜索词把对应角色切到中间并触发 hint 动画（全名优先，包含匹配兜底） - ALWAYS called
   useEffect(() => {
     const key = searchName.trim().toLowerCase();
-    if (!key) return;
+    if (!key || items.length === 0) return;
     let i = items.findIndex((x) => x.name.toLowerCase() === key);
     if (i < 0) i = items.findIndex((x) => x.name.toLowerCase().includes(key));
     if (i >= 0) {
       goTo(i);
       fireHint();
     }
-  }, [searchName]); // 参考对照文件的写法
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchName, items]); // 参考对照文件的写法
+
+  // Conditional rendering AFTER all hooks
+  const N = items.length;
+  const idxL = N >= 2 ? mod(cur - 1, N) : cur;
+  const idxR = N >= 3 ? mod(cur + 1, N) : N === 2 ? mod(cur + 1, N) : cur;
+
+  if (loading) {
+    return <div className="text-center text-white">Loading characters...</div>;
+  }
+  
+  if (N === 0) {
+    return (
+      <div className="text-center text-white">
+        No characters found.
+        <div style={{fontSize: 12, marginTop: 16, textAlign: 'left', background: '#222', padding: 8, borderRadius: 4, maxWidth: 600, margin: '16px auto'}}>
+          <strong>Debug Info:</strong><br/>
+          URL campaignId: {params?.id ? String(params.id) : 'undefined'}<br/>
+          localStorage campaignId: {typeof window !== 'undefined' ? localStorage.getItem('currentCampaignId') : 'N/A'}<br/>
+          Final campaignId: {campaignId || 'undefined'}
+        </div>
+      </div>
+    );
+  }
 
   function Card({
     data,
@@ -639,6 +690,12 @@ function CharacterCarouselStacked({
                       src={data.img}
                       alt={data.name}
                       className="h-full w-full object-cover rounded-[20px] border border-[#E9E9E9]"
+                      onError={(e) => {
+                        const target = e.target as HTMLImageElement;
+                        if (target.src !== '/Griff.png') {
+                          target.src = '/Griff.png';
+                        }
+                      }}
                     />
                   </div>
                   <div
@@ -738,6 +795,12 @@ function CharacterCarouselStacked({
                   src={data.img}
                   alt={data.name}
                   className="h-full w-full object-cover rounded-[20px] border border-[#E9E9E9]"
+                  onError={(e) => {
+                    const target = e.target as HTMLImageElement;
+                    if (target.src !== '/Griff.png') {
+                      target.src = '/Griff.png';
+                    }
+                  }}
                 />
               </div>
               <div
