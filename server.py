@@ -31,7 +31,7 @@ WHISPER_COMPUTE = os.getenv("WHISPER_COMPUTE", "int8")
 LANG = os.getenv("ASR_LANG", "en")
 
 BEAM = int(os.getenv("BEAM", "1"))
-TEMP = float(os.getenv("TEMP", "0.0"))
+TEMP = 0.0
 
 DB_PATH = os.getenv("CHROMA_DB_PATH", "./chroma_db")
 COLLECTION_NAME = os.getenv("CHROMA_COLLECTION", "docs")
@@ -63,21 +63,39 @@ whisper = WhisperModel(WHISPER_MODEL, device=WHISPER_DEVICE, compute_type=WHISPE
 vad = webrtcvad.Vad(2)
 
 # =====================================================================
-# EMBEDDING FUNCTION (Ollama)
+# EMBEDDING FUNCTION (Ollama) — tolerant to Chroma EF API changes
 # =====================================================================
 AllowedMeta = Union[str, int, float, bool]
 
 class OllamaEmbeddingFunction:
+    """
+    Works with older Chroma (calls __call__) and newer Chroma
+    (calls embed_query/embed_documents with input=...).
+    """
     def __init__(self, base_url: str = OLLAMA_URL, model: str = EMBED_MODEL, timeout: int = 60):
-        self.base_url, self.model, self.timeout = base_url.rstrip("/"), model, timeout
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.timeout = timeout
 
     def name(self) -> str:
         return f"ollama::{self.model}"
 
-    # IMPORTANT: Chroma expects the param to be named **input**
+    # Back-compat: some Chroma versions call __call__(input=[...])
     def __call__(self, input: List[str]) -> List[List[float]]:
-        # Coerce to list if a single string was passed
         texts = [input] if isinstance(input, str) else input
+        return self._embed(texts)
+
+    # Newer Chroma interface (accepts input=..., **kwargs for future-proof)
+    def embed_documents(self, input: List[str], **kwargs) -> List[List[float]]:
+        texts = [input] if isinstance(input, str) else input
+        return self._embed(texts)
+
+    # Some Chroma builds expect a BATCH shape back ([[...]]), not a flat list.
+    def embed_query(self, input: Union[str, List[str]], **kwargs) -> List[List[float]]:
+        text = input[0] if isinstance(input, list) else input
+        return self._embed([text])
+
+    def _embed(self, texts: List[str]) -> List[List[float]]:
         out: List[List[float]] = []
         for t in texts:
             r = requests.post(
@@ -94,6 +112,45 @@ class OllamaEmbeddingFunction:
         return out
 
 ef = OllamaEmbeddingFunction()
+
+def embed_query_batched(text: str) -> List[List[float]]:
+    """
+    Version-agnostic query embedding:
+    - Try ef.embed_query(input=...)
+    - Fallback to ef.embed_query(...)
+    - Fallback to ef([text]) (old __call__)
+    - Last resort: call Ollama HTTP directly
+    Always returns [[float]].
+    """
+    # Try various EF call styles
+    try:
+        vec = ef.embed_query(input=text)
+    except TypeError:
+        try:
+            vec = ef.embed_query(text)
+        except Exception:
+            try:
+                vec = ef([text])
+            except Exception:
+                # direct HTTP fallback
+                r = requests.post(
+                    f"{OLLAMA_URL.rstrip('/')}/api/embeddings",
+                    json={"model": EMBED_MODEL, "prompt": text},
+                    timeout=OLLAMA_TIMEOUT,
+                )
+                r.raise_for_status()
+                emb = r.json().get("embedding")
+                vec = [emb] if emb else None
+
+    if vec is None:
+        raise RuntimeError("Failed to obtain query embedding.")
+
+    # Normalize to batch shape
+    if isinstance(vec, list) and vec and isinstance(vec[0], float):
+        return [vec]  # [float] -> [[float]]
+    if isinstance(vec, list) and vec and isinstance(vec[0], list):
+        return vec    # already [[float]]
+    raise RuntimeError(f"Unexpected embedding shape from EF: {type(vec)}")
 
 # =====================================================================
 # CHROMA BOOTSTRAP (auto-create & self-heal)
@@ -347,8 +404,14 @@ def ingest(req: IngestRequest):
 @app.post("/query")
 def query(req: QueryRequest):
     ensure_collection()
+    # Version-agnostic embedding at query time
+    try:
+        qbatch = embed_query_batched(req.query)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Query embedding failed: {e}")
+
     res = collection.query(
-        query_texts=[req.query],
+        query_embeddings=qbatch,
         n_results=req.top_k,
         where=req.where,
         include=["documents", "metadatas", "distances"],
@@ -376,8 +439,14 @@ def answer(req: AnswerRequest):
     ensure_collection()
     effective_where = req.where if (req.where and len(req.where)) else {"type": "raw"}
 
+    # Version-agnostic embedding at query time
+    try:
+        qbatch = embed_query_batched(req.question)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Query embedding failed: {e}")
+
     res = collection.query(
-        query_texts=[req.question],
+        query_embeddings=qbatch,
         n_results=req.top_k,
         where=effective_where,
         include=["documents", "metadatas", "distances"],
@@ -588,4 +657,4 @@ async def transcribe(file: UploadFile = File(...)):
 if __name__ == "__main__":
     # Ensure DB path exists at boot
     os.makedirs(DB_PATH, exist_ok=True)
-    uvicorn.run("server:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")), reload=False)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")), reload=False)
