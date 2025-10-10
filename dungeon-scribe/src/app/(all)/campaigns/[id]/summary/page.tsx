@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import Image from "next/image";
-import { useRouter } from "next/navigation"; // back 按钮
+import { useRouter, useParams } from "next/navigation"; // back 按钮
 
 /* Adjust parameters */
 const HEADER_H = 88;
@@ -439,34 +440,12 @@ function CharacterCarouselStacked({
 }: {
   searchName?: string;
 }) {
-  const items = [
-    {
-      name: "Griff",
-      img: "/Griff.png",
-      details:
-        "Veteran battle master of the north. Proficiencies: longsword, tactics, leadership.",
-    },
-    {
-      name: "Arwyn",
-      img: "/Griff.png",
-      details:
-        "Elven ranger from the silver woods. Proficiencies: bow, tracking, nature magic.",
-    },
-    {
-      name: "Dorian",
-      img: "/Griff.png",
-      details:
-        "Human warlock with a cryptic pact. Proficiencies: eldritch arts, arcana, deception.",
-    },
-    {
-      name: "Lyra",
-      img: "/Griff.png",
-      details:
-        "Half-elf bard with a silver tongue. Proficiencies: performance, persuasion, rapier.",
-    },
-  ];
-
+  const params = useParams();
+  const [campaignId, setCampaignId] = useState<string | undefined>(undefined);
+  const [items, setItems] = useState<Array<{ name: string; img: string; details: string }>>([]);
+  const [loading, setLoading] = useState(true);
   const [cur, setCur] = useState(0);
+  const [direction, setDirection] = useState<"left" | "right">("right");
   const [flippedIndex, setFlippedIndex] = useState<number | null>(null);
 
   // 命中提示动画（轻微缩放 + 发光框）
@@ -476,46 +455,127 @@ function CharacterCarouselStacked({
     window.setTimeout(() => setHintOn(false), 900);
   };
 
-  const N = items.length;
-  if (N === 0) return null;
+  // On mount, determine campaignId
+  useEffect(() => {
+    let id = params?.id;
+    if (Array.isArray(id)) {
+      id = id[0];
+    }
+    
+    // If URL has template string or no id, use localStorage instead
+    if (!id || id === '${campaignId}' || id === '%24%7BcampaignId%7D') {
+      if (typeof window !== 'undefined') {
+        id = localStorage.getItem('currentCampaignId') || undefined;
+      }
+    }
+    
+    setCampaignId(id as string | undefined);
+  }, [params]);
 
+  // Fetch roles from database
+  useEffect(() => {
+    if (!campaignId) {
+      console.log('No campaignId available, skipping fetch');
+      setLoading(false);
+      return;
+    }
+    console.log('Fetching roles for campaignId:', campaignId);
+    setLoading(true);
+    fetch(`/api/data?type=roles&campaignId=${campaignId}`)
+      .then((res) => {
+        console.log('API response status:', res.status);
+        return res.json();
+      })
+      .then((data) => {
+        console.log('API response data:', data);
+        if (data.roles && Array.isArray(data.roles)) {
+          const processedRoles = data.roles.map((role: any) => {
+            console.log(`Character "${role.name}" image data:`, role.img ? role.img.substring(0, 50) + '...' : 'NO IMAGE');
+            return {
+              name: role.name,
+              img: role.img || "/Griff.png",
+              details: role.details || `Level ${role.level || 1} character. No detailed description available yet.`
+            };
+          });
+          setItems(processedRoles);
+        } else {
+          setItems([]);
+        }
+      })
+      .catch((err) => {
+        console.error('API fetch error:', err);
+        setItems([]);
+      })
+      .finally(() => setLoading(false));
+  }, [campaignId]);
+
+  // Helper functions (always defined)
   const mod = (i: number, m: number) => ((i % m) + m) % m;
-  const idxL = N >= 2 ? mod(cur - 1, N) : cur;
-  const idxR = N >= 3 ? mod(cur + 1, N) : N === 2 ? mod(cur + 1, N) : cur;
-
+  
   const prev = () => {
+    setDirection("left");
     setCur((v) => mod(v - 1, N));
     setFlippedIndex(null);
   };
   const next = () => {
+    setDirection("right");
     setCur((v) => mod(v + 1, N));
     setFlippedIndex(null);
   };
   const goTo = (i: number) => {
+    setDirection(i > cur ? "right" : "left");
     setCur(mod(i, N));
     setFlippedIndex(null);
   };
 
-  // 根据搜索词把对应角色切到中间并触发 hint 动画（全名优先，包含匹配兜底）
+  // 根据搜索词把对应角色切到中间并触发 hint 动画（全名优先，包含匹配兜底） - ALWAYS called
   useEffect(() => {
     const key = searchName.trim().toLowerCase();
-    if (!key) return;
+    if (!key || items.length === 0) return;
     let i = items.findIndex((x) => x.name.toLowerCase() === key);
     if (i < 0) i = items.findIndex((x) => x.name.toLowerCase().includes(key));
     if (i >= 0) {
       goTo(i);
       fireHint();
     }
-  }, [searchName]); // 参考对照文件的写法
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchName, items]); // 参考对照文件的写法
+
+  // Conditional rendering AFTER all hooks
+  const N = items.length;
+  const idxL = N >= 2 ? mod(cur - 1, N) : cur;
+  const idxR = N >= 3 ? mod(cur + 1, N) : N === 2 ? mod(cur + 1, N) : cur;
+
+  if (loading) {
+    return <div className="text-center text-white">Loading characters...</div>;
+  }
+  
+  if (N === 0) {
+    return (
+      <div className="text-center text-white">
+        No characters found.
+        <div style={{fontSize: 12, marginTop: 16, textAlign: 'left', background: '#222', padding: 8, borderRadius: 4, maxWidth: 600, margin: '16px auto'}}>
+          <strong>Debug Info:</strong><br/>
+          URL campaignId: {params?.id ? String(params.id) : 'undefined'}<br/>
+          localStorage campaignId: {typeof window !== 'undefined' ? localStorage.getItem('currentCampaignId') : 'N/A'}<br/>
+          Final campaignId: {campaignId || 'undefined'}
+        </div>
+      </div>
+    );
+  }
 
   function Card({
     data,
     type,
     index,
+    isActive,
+    direction,
   }: {
     data: { name: string; img: string; details: string };
     type: "left" | "center" | "right";
     index: number;
+    isActive?: boolean;
+    direction?: "left" | "right";
   }) {
     const styleByType: Record<typeof type, React.CSSProperties> = {
       left: {
@@ -551,38 +611,176 @@ function CharacterCarouselStacked({
     const isCenter = type === "center";
     const isFlipped = isCenter && flippedIndex === index;
 
+    // Slide animation variants
+    const slideVariants = {
+      initial: (dir: "left" | "right") => ({
+        x: dir === "right" ? 80 : -80,
+        opacity: 0,
+        scale: 0.96,
+      }),
+      animate: {
+        x: 0,
+        opacity: 1,
+        scale: 1,
+        transition: { type: "spring", stiffness: 320, damping: 28 },
+      },
+      exit: (dir: "left" | "right") => ({
+        x: dir === "right" ? -80 : 80,
+        opacity: 0,
+        scale: 0.96,
+        transition: { duration: 0.22 },
+      }),
+    };
+
+    if (isCenter) {
+      return (
+        <AnimatePresence mode="wait" custom={direction}>
+          <motion.div
+            key={data.name}
+            style={s}
+            custom={direction}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            variants={slideVariants}
+          >
+            {/* 中间卡片命中提示：描边+发光 */}
+            {hintOn && (
+              <motion.div
+                className="pointer-events-none absolute -inset-3 rounded-[26px]"
+                style={{
+                  border: "4px solid #A43718",
+                  filter: "drop-shadow(0 0 14px rgba(164,55,24,0.6))",
+                  opacity: 0.9,
+                  borderRadius: 26,
+                }}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1, scale: 1.08 }}
+                exit={{ opacity: 0 }}
+              />
+            )}
+            <div
+              className="h-full w-full [perspective:1200px] rounded-[20px]"
+              style={{
+                transform: hintOn ? "scale(1.03)" : undefined,
+                transition: "transform 420ms ease-out",
+              }}
+            >
+              <div
+                className="relative h-full w-full rounded-[20px] transition-transform duration-500 [transform-style:preserve-3d] shadow-[0_22px_74px_rgba(0,0,0,0.6)]"
+                style={{
+                  transform: isFlipped ? "rotateY(180deg)" : "rotateY(0deg)",
+                }}
+              >
+                {/* Front */}
+                <div
+                  className="absolute inset-0 rounded-[20px] border border-[#E9E9E9] [backface-visibility:hidden] overflow-hidden"
+                  style={{ background: "#F5F5F5" }}
+                >
+                  <div
+                    className="absolute"
+                    style={{
+                      left: "4.26%",
+                      right: "4.26%",
+                      top: "4.31%",
+                      bottom: "24.31%",
+                    }}
+                  >
+                    <img
+                      src={data.img}
+                      alt={data.name}
+                      className="h-full w-full object-cover rounded-[20px] border border-[#E9E9E9]"
+                      onError={(e) => {
+                        const target = e.target as HTMLImageElement;
+                        if (target.src !== '/Griff.png') {
+                          target.src = '/Griff.png';
+                        }
+                      }}
+                    />
+                  </div>
+                  <div
+                    className="absolute"
+                    style={{ left: "4.26%", right: "35%", top: "77.5%" }}
+                  >
+                    <div
+                      className="text-[#1D1D1D]"
+                      style={{
+                        fontFamily: '"Abhaya Libre ExtraBold", serif',
+                        fontWeight: 800,
+                        fontSize: 24,
+                        lineHeight: "28px",
+                      }}
+                    >
+                      {data.name}
+                    </div>
+                  </div>
+                  <div
+                    className="absolute"
+                    style={{ left: "4.26%", right: "50.13%", top: "87.38%" }}
+                  >
+                    <button
+                      className="text-[#A43718] text-[18px] underline-offset-2 hover:underline cursor-pointer"
+                      style={{ fontFamily: '"Adamina", serif' }}
+                      onClick={() => setFlippedIndex(index)}
+                    >
+                      View Details
+                    </button>
+                  </div>
+                </div>
+
+                {/* Back */}
+                <div
+                  className="absolute inset-0 rounded-[20px] border border-[#E9E9E9] bg-white px-6 py-5 flex flex-col gap-3 [backface-visibility:hidden]"
+                  style={{ transform: "rotateY(180deg)" }}
+                  onClick={() => setFlippedIndex(null)}
+                >
+                  <div
+                    className="text-[#1D1D1D]"
+                    style={{
+                      fontFamily: '"Abhaya Libre ExtraBold", serif',
+                      fontWeight: 800,
+                      fontSize: 24,
+                    }}
+                  >
+                    {data.name}
+                  </div>
+                  <div
+                    className="text-[#333]"
+                    style={{
+                      fontFamily: '"Inter", sans-serif',
+                      fontSize: 15,
+                      lineHeight: "24px",
+                    }}
+                  >
+                    {data.details}
+                  </div>
+                  <div className="mt-auto flex justify-end">
+                    <button
+                      className="px-4 py-2 rounded-md bg-[#3D2304] text-white hover:opacity-95 active:scale-95 transition cursor-pointer"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setFlippedIndex(null);
+                      }}
+                    >
+                      Back
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        </AnimatePresence>
+      );
+    }
+    // Left/right cards: no animation
     return (
       <div style={s}>
-        {/* 中间卡片命中提示：描边+发光 */}
-        {isCenter && hintOn && (
-          <div
-            className="pointer-events-none absolute -inset-3 rounded-[26px]"
-            style={{
-              border: "4px solid #A43718",
-              filter: "drop-shadow(0 0 14px rgba(164,55,24,0.6))",
-              opacity: 0.9,
-              borderRadius: 26,
-            }}
-          />
-        )}
-
-        <div
-          className="h-full w-full [perspective:1200px] rounded-[20px]"
-          style={{
-            transform: isCenter && hintOn ? "scale(1.03)" : undefined,
-            transition: "transform 420ms ease-out",
-          }}
-        >
-          <div
-            className="relative h-full w-full rounded-[20px] transition-transform duration-500 [transform-style:preserve-3d] shadow-[0_22px_74px_rgba(0,0,0,0.6)]"
-            style={{
-              transform: isFlipped ? "rotateY(180deg)" : "rotateY(0deg)",
-            }}
-          >
+        <div className="h-full w-full [perspective:1200px] rounded-[20px]">
+          <div className="relative h-full w-full rounded-[20px] transition-transform duration-500 [transform-style:preserve-3d] shadow-[0_22px_74px_rgba(0,0,0,0.6)]">
             {/* Front */}
             <div
               className="absolute inset-0 rounded-[20px] border border-[#E9E9E9] [backface-visibility:hidden] overflow-hidden"
-              style={{ background: isCenter ? "#F5F5F5" : "#FFFFFF" }}
+              style={{ background: type === "left" || type === "right" ? "#FFFFFF" : undefined }}
             >
               <div
                 className="absolute"
@@ -597,6 +795,12 @@ function CharacterCarouselStacked({
                   src={data.img}
                   alt={data.name}
                   className="h-full w-full object-cover rounded-[20px] border border-[#E9E9E9]"
+                  onError={(e) => {
+                    const target = e.target as HTMLImageElement;
+                    if (target.src !== '/Griff.png') {
+                      target.src = '/Griff.png';
+                    }
+                  }}
                 />
               </div>
               <div
@@ -622,18 +826,16 @@ function CharacterCarouselStacked({
                 <button
                   className="text-[#A43718] text-[18px] underline-offset-2 hover:underline cursor-pointer"
                   style={{ fontFamily: '"Adamina", serif' }}
-                  onClick={() => isCenter && setFlippedIndex(index)}
+                  disabled
                 >
                   View Details
                 </button>
               </div>
             </div>
-
             {/* Back */}
             <div
               className="absolute inset-0 rounded-[20px] border border-[#E9E9E9] bg-white px-6 py-5 flex flex-col gap-3 [backface-visibility:hidden]"
               style={{ transform: "rotateY(180deg)" }}
-              onClick={() => isCenter && setFlippedIndex(null)}
             >
               <div
                 className="text-[#1D1D1D]"
@@ -741,7 +943,7 @@ function CharacterCarouselStacked({
       {/* 三张位 */}
       <div className="relative" style={{ height: 438 }}>
         <Card data={items[idxL]} type="left" index={idxL} />
-        <Card data={items[cur]} type="center" index={cur} />
+        <Card data={items[cur]} type="center" index={cur} isActive direction={direction} />
         <Card data={items[idxR]} type="right" index={idxR} />
       </div>
 

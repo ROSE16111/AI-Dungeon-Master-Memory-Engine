@@ -7,6 +7,7 @@ import {
   forwardRef,
   useImperativeHandle,
 } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { useRouter, useParams } from "next/navigation";
 import { useTranscript } from "../../../context/TranscriptContext";
 import { ragAnswer } from "@/lib/ragClient";
@@ -275,6 +276,7 @@ const CharacterCarouselStacked = forwardRef(function CharacterCarouselStacked(
   _ref: React.Ref<{ focusByName: (name: string) => void }>
 ) {
   const [flippedIndex, setFlippedIndex] = useState<number | null>(null);
+  const [direction, setDirection] = useState<"left" | "right">("right");
 
   // hint animation when focused by search
   const [hintOn, setHintOn] = useState(false);
@@ -290,14 +292,17 @@ const CharacterCarouselStacked = forwardRef(function CharacterCarouselStacked(
   const idxR = (cur + 1) % N;
 
   const prev = () => {
+    setDirection("left");
     setCur((cur - 1 + N) % N);
     setFlippedIndex(null);
   };
   const next = () => {
+    setDirection("right");
     setCur((cur + 1) % N);
     setFlippedIndex(null);
   };
   const goTo = (i: number) => {
+    setDirection(i > cur ? "right" : "left");
     setCur(i);
     setFlippedIndex(null);
   };
@@ -335,10 +340,12 @@ const CharacterCarouselStacked = forwardRef(function CharacterCarouselStacked(
     data,
     type,
     index,
+    direction,
   }: {
     data: CharItem;
     type: "left" | "center" | "right";
     index: number;
+    direction?: "left" | "right";
   }) {
     const styleByType: Record<typeof type, React.CSSProperties> = {
       left: {
@@ -370,28 +377,162 @@ const CharacterCarouselStacked = forwardRef(function CharacterCarouselStacked(
     const isCenter = type === "center";
     const isFlipped = isCenter && flippedIndex === index;
 
+    // Slide animation variants
+    const slideVariants = {
+      initial: (dir: "left" | "right") => ({
+        x: dir === "right" ? 80 : -80,
+        opacity: 0,
+        scale: 0.96,
+      }),
+      animate: {
+        x: 0,
+        opacity: 1,
+        scale: 1,
+        transition: { type: "spring", stiffness: 320, damping: 28 },
+      },
+      exit: (dir: "left" | "right") => ({
+        x: dir === "right" ? -80 : 80,
+        opacity: 0,
+        scale: 0.96,
+        transition: { duration: 0.22 },
+      }),
+    };
+
+    if (isCenter) {
+      return (
+        <AnimatePresence mode="wait" custom={direction}>
+          <motion.div
+            key={data.name}
+            className="absolute"
+            style={{ ...s, transform: hintOn ? "scale(1.03)" : undefined, transition: "transform 420ms ease-out" }}
+            custom={direction}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            variants={slideVariants}
+          >
+            {/* 可选发光边框，不影响点击 */}
+            {hintOn && (
+              <motion.div
+                className="pointer-events-none absolute -inset-3 rounded-[26px]"
+                style={{
+                  border: "4px solid #A43718",
+                  filter: "drop-shadow(0 0 14px rgba(164,55,24,0.6))",
+                  borderRadius: 26,
+                  opacity: 0.9,
+                }}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1, scale: 1.08 }}
+                exit={{ opacity: 0 }}
+              />
+            )}
+            <div className="h-full w-full [perspective:1200px] rounded-[20px]">
+              <div
+                className="relative h-full w-full rounded-[20px] transition-transform duration-500 [transform-style:preserve-3d] shadow-[0_22px_74px_rgba(0,0,0,0.6)]"
+                style={{
+                  transform: isFlipped ? "rotateY(180deg)" : "rotateY(0deg)",
+                }}
+              >
+                {/* Front */}
+                <div
+                  className="absolute inset-0 rounded-[20px] border border-[#E9E9E9] [backface-visibility:hidden] overflow-hidden"
+                  style={{ background: "#F5F5F5" }}
+                >
+                  <div
+                    className="absolute"
+                    style={{
+                      left: "4.26%",
+                      right: "4.26%",
+                      top: "4.31%",
+                      bottom: "24.31%",
+                    }}
+                  >
+                    <img
+                      src={data.img}
+                      alt={data.name}
+                      className="h-full w-full object-cover rounded-[20px] border border-[#E9E9E9]"
+                    />
+                  </div>
+                  <div
+                    className="absolute"
+                    style={{ left: "4.26%", right: "35%", top: "77.5%" }}
+                  >
+                    <div
+                      className="text-[#1D1D1D]"
+                      style={{
+                        fontFamily: '"Abhaya Libre ExtraBold", serif',
+                        fontWeight: 800,
+                        fontSize: 24,
+                        lineHeight: "28px",
+                      }}
+                    >
+                      {data.name}
+                    </div>
+                  </div>
+                  <div
+                    className="absolute"
+                    style={{ left: "4.26%", right: "50.13%", top: "87.38%" }}
+                  >
+                    <button
+                      className="text-[#A43718] text-[18px] underline-offset-2 hover:underline cursor-pointer"
+                      style={{ fontFamily: '"Adamina", serif' }}
+                      onClick={() => setFlippedIndex(index)}
+                    >
+                      View Details
+                    </button>
+                  </div>
+                </div>
+
+                {/* Back */}
+                <div
+                  className="absolute inset-0 rounded-[20px] border border-[#E9E9E9] bg-white px-6 py-5 flex flex-col gap-3 [backface-visibility:hidden]"
+                  style={{ transform: "rotateY(180deg)" }}
+                  onClick={() => setFlippedIndex(null)}
+                >
+                  <div
+                    className="text-[#1D1D1D]"
+                    style={{
+                      fontFamily: '"Abhaya Libre ExtraBold", serif',
+                      fontWeight: 800,
+                      fontSize: 24,
+                    }}
+                  >
+                    {data.name}
+                  </div>
+                  <div
+                    className="text-[#333]"
+                    style={{
+                      fontFamily: '"Inter", sans-serif',
+                      fontSize: 15,
+                      lineHeight: "24px",
+                    }}
+                  >
+                    {data.details}
+                  </div>
+                  <div className="mt-auto flex justify-end">
+                    <button
+                      className="px-4 py-2 rounded-md bg-[#3D2304] text-white hover:opacity-95 active:scale-95 transition cursor-pointer"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setFlippedIndex(null);
+                      }}
+                    >
+                      Back
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        </AnimatePresence>
+      );
+    }
+    // Left/right cards: no animation
     return (
       <div
         className="absolute"
-        style={{
-          ...s,
-          transform: isCenter && hintOn ? "scale(1.03)" : undefined,
-          transition: "transform 420ms ease-out",
-        }}
+        style={{ ...s }}
       >
-        {/* 可选发光边框，不影响点击 */}
-        {isCenter && hintOn && (
-          <div
-            className="pointer-events-none absolute -inset-3 rounded-[26px]"
-            style={{
-              border: "4px solid #A43718",
-              filter: "drop-shadow(0 0 14px rgba(164,55,24,0.6))",
-              borderRadius: 26,
-              opacity: 0.9,
-            }}
-          />
-        )}
-
         <div className="h-full w-full [perspective:1200px] rounded-[20px]">
           <div
             className="relative h-full w-full rounded-[20px] transition-transform duration-500 [transform-style:preserve-3d] shadow-[0_22px_74px_rgba(0,0,0,0.6)]"
@@ -402,7 +543,7 @@ const CharacterCarouselStacked = forwardRef(function CharacterCarouselStacked(
             {/* Front */}
             <div
               className="absolute inset-0 rounded-[20px] border border-[#E9E9E9] [backface-visibility:hidden] overflow-hidden"
-              style={{ background: isCenter ? "#F5F5F5" : "#FFFFFF" }}
+              style={{ background: type === "left" || type === "right" ? "#FFFFFF" : undefined }}
             >
               <div
                 className="absolute"
@@ -442,18 +583,16 @@ const CharacterCarouselStacked = forwardRef(function CharacterCarouselStacked(
                 <button
                   className="text-[#A43718] text-[18px] underline-offset-2 hover:underline cursor-pointer"
                   style={{ fontFamily: '"Adamina", serif' }}
-                  onClick={() => isCenter && setFlippedIndex(index)}
+                  disabled
                 >
                   View Details
                 </button>
               </div>
             </div>
-
             {/* Back */}
             <div
               className="absolute inset-0 rounded-[20px] border border-[#E9E9E9] bg-white px-6 py-5 flex flex-col gap-3 [backface-visibility:hidden]"
               style={{ transform: "rotateY(180deg)" }}
-              onClick={() => isCenter && setFlippedIndex(null)}
             >
               <div
                 className="text-[#1D1D1D]"
@@ -556,7 +695,7 @@ const CharacterCarouselStacked = forwardRef(function CharacterCarouselStacked(
 
       {/* 3 cards */}
       <Card data={items[idxL]} type="left" index={idxL} />
-      <Card data={items[cur]} type="center" index={cur} />
+      <Card data={items[cur]} type="center" index={cur} direction={direction} />
       <Card data={items[idxR]} type="right" index={idxR} />
 
       {/* dots */}
@@ -1122,10 +1261,6 @@ export default function RecordPage() {
   const { transcript, summary, setTranscript, setSummary } = useTranscript();
 
   const router = useRouter();
-  const params = useParams();
-  const id = Array.isArray((params as any)?.id)
-    ? (params as any).id[0]
-    : (params as any)?.id;
 
   // 先声明 view（避免“使用前声明”错误）
   const [view, setView] = useState<"sessions" | "character">("sessions");
@@ -1472,34 +1607,108 @@ export default function RecordPage() {
   };
 
   // ======= Character carousel data/state (new style) ======= //
-  const charItems: CharItem[] = [
-    {
-      name: "Griff",
-      img: "/Griff.png",
-      details:
-        "Veteran battle master of the north. Proficiencies: longsword, tactics, leadership.",
-    },
-    {
-      name: "Arwyn",
-      img: "/Griff.png",
-      details:
-        "Elven ranger from the silver woods. Proficiencies: bow, tracking, nature magic.",
-    },
-    {
-      name: "Dorian",
-      img: "/Griff.png",
-      details:
-        "Human warlock with a cryptic pact. Proficiencies: eldritch arts, arcana, deception.",
-    },
-    {
-      name: "Lyra",
-      img: "/Griff.png",
-      details:
-        "Half-elf bard with a silver tongue. Proficiencies: performance, persuasion, support magic.",
-    },
-  ];
+  const [charItems, setCharItems] = useState<CharItem[]>([]);
+  const [charLoading, setCharLoading] = useState(true);
   const [charCur, setCharCur] = useState(0);
   const [charSearchKey, setCharSearchKey] = useState("");
+  const [currentCampaignId, setCurrentCampaignId] = useState<string>("");
+
+  // Fetch character roles from database
+  useEffect(() => {
+    const fetchRoles = async () => {
+      try {
+        setCharLoading(true);
+        console.log('Getting current campaign from cookie...');
+        
+        // First, get the current campaign from cookie
+        const currentCampaignRes = await fetch("/api/current-campaign");
+        if (!currentCampaignRes.ok) {
+          throw new Error('Failed to get current campaign');
+        }
+        
+        const currentCampaignData = await currentCampaignRes.json();
+        console.log('Current campaign from cookie:', currentCampaignData);
+        
+        if (!currentCampaignData.id) {
+          console.log('No current campaign set');
+          setCharItems([{
+            name: "No Campaign Selected",
+            img: "/Griff.png",
+            details: "No campaign selected. Please go to login and select a campaign first!"
+          }]);
+          return;
+        }
+
+        setCurrentCampaignId(currentCampaignData.id);
+        
+        // Now get all campaigns with their roles to find the current one
+        const res = await fetch("/api/data");
+        if (!res.ok) {
+          throw new Error(`HTTP error! status: ${res.status}`);
+        }
+        
+        const data = await res.json();
+        console.log('All campaigns data:', data);
+        
+        if (!data.campaigns || data.campaigns.length === 0) {
+          console.log('No campaigns found in database');
+          setCharItems([{
+            name: "No Campaigns",
+            img: "/Griff.png",
+            details: "No campaigns found. Please create a campaign first!"
+          }]);
+          return;
+        }
+
+        // Find the current campaign by ID
+        const currentCampaign = data.campaigns.find((c: any) => c.id === currentCampaignData.id);
+        if (!currentCampaign) {
+          console.log('Current campaign not found in database');
+          setCharItems([{
+            name: "Campaign Not Found",
+            img: "/Griff.png",
+            details: `Campaign with ID "${currentCampaignData.id}" not found. Please select a valid campaign.`
+          }]);
+          return;
+        }
+
+        console.log('Using campaign:', currentCampaign.title, 'with roles:', currentCampaign.roles);
+
+        // Extract roles from the current campaign
+        if (currentCampaign.roles && currentCampaign.roles.length > 0) {
+          // Transform roles to match CharItem format
+          const transformedRoles = currentCampaign.roles.map((role: any) => ({
+            name: role.name,
+            img: "/Griff.png", // Default image, you can enhance this later
+            details: `Level ${role.level} character. ${role.description || 'No description available.'}`
+          }));
+          
+          console.log('Setting char items for campaign', currentCampaign.title, ':', transformedRoles);
+          setCharItems(transformedRoles);
+        } else {
+          console.log('No roles found in current campaign');
+          setCharItems([{
+            name: "No Characters",
+            img: "/Griff.png",
+            details: `No characters found in campaign "${currentCampaign.title}". Create some roles first!`
+          }]);
+        }
+      } catch (error) {
+        console.error('Error fetching roles:', error);
+        // Fallback to default data on error
+        setCharItems([{
+          name: "Error Loading",
+          img: "/Griff.png", 
+          details: `Failed to load characters: ${error instanceof Error ? error.message : 'Unknown error'}`
+        }]);
+      } finally {
+        console.log('Setting loading to false');
+        setCharLoading(false);
+      }
+    };
+
+    fetchRoles();
+  }, []);
 
   return (
     <div className="fixed inset-0 overflow-hidden">
@@ -1626,8 +1835,9 @@ export default function RecordPage() {
                 />
               </div>
               <button
-                onClick={() => router.push(`/campaigns/${id}/summary`)}
-                className="ml-45 mt-6 font-bold text-[#3D2304] underline hover:text-[#A43718] cursor-pointer"
+                onClick={() => currentCampaignId && router.push(`/campaigns/${currentCampaignId}/summary`)}
+                className="ml-45 mt-6 font-bold text-[#3D2304] underline hover:text-[#A43718] cursor-pointer disabled:opacity-50"
+                disabled={!currentCampaignId}
               >
                 Get Summary
               </button>
@@ -1710,12 +1920,18 @@ export default function RecordPage() {
                 pointerEvents: "auto",
               }}
             >
-              <CharacterCarouselStacked
-                items={charItems}
-                cur={charCur}
-                setCur={setCharCur}
-                searchName={charSearchKey}
-              />
+              {charLoading ? (
+                <div className="flex items-center justify-center h-full text-white text-xl">
+                  Loading characters...
+                </div>
+              ) : (
+                <CharacterCarouselStacked
+                  items={charItems}
+                  cur={charCur}
+                  setCur={setCharCur}
+                  searchName={charSearchKey}
+                />
+              )}
             </div>
           )}
         </section>

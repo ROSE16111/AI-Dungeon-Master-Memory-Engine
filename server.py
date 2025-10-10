@@ -743,7 +743,7 @@ async def handle_audio_ws(websocket: WebSocket):
                             elif not isinstance(segments, list):
                                 segments = []
 
-                            # 逐段累计（原样使用模型输出，不强加 Markdown）
+                            
                             new_added = False
                             for seg in segments:
                                 seg = (seg or "").strip()
