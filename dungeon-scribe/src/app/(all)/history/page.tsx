@@ -6,7 +6,15 @@ import { useRouter } from "next/navigation";
 import { TopBar } from "@/components/layout/topbar";
 
 /* （可选）锁定滚动：History 列表页面通常需要滚动，这里先不用 */
-// function useLockBodyScroll() { ... }
+function useLockBodyScroll() {
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, []);
+}
 
 const GRID_OFFSET = 28; // Space between title and first row of cards
 const PAGE_SIZE = 6;
@@ -163,15 +171,27 @@ function ProgressBadge({ completed }: { completed: boolean }) {
 function CardDisplay({
   story,
   onAction,
+  onDelete,
 }: {
   story: Story;
   onAction: (s: Story, type: "continue" | "summary") => void;
+  onDelete: (s: Story) => void;
 }) {
   return (
-    // =====2.1 Outer white card container
     <div className="relative w-[300px] bg-white rounded-xl shadow-lg overflow-hidden border border-black/10">
-      {/* 2.1.1 Top-right Completed / In Progress icon */}
-      <ProgressBadge completed={story.completed} />
+      {/* Completed / In Progress icon */}
+      {/* <ProgressBadge completed={story.completed} /> */}
+
+      {/* 删除按钮右上角 */}
+      <button
+        onClick={() => onDelete(story)}
+        className="absolute top-2 right-2 z-30 p-2 bg-white/85 rounded-full hover:bg-red-100 active:scale-95 transition shadow"
+        aria-label="Delete record"
+        title="Delete this record"
+      >
+        🗑️
+      </button>
+
       <div className="relative w-full h-[140px]">
         <Image
           src={story.imageUrl}
@@ -180,27 +200,21 @@ function CardDisplay({
           className="object-cover"
         />
       </div>
-      {/* 2.1.2 Text and action area */}
+
       <div className="px-4 pt-3 pb-3">
         <div className="flex justify-between items-center">
-          {/* Left side: title and date */}
           <div>
-            {/* Story title */}
             <div className="text-lg font-bold text-gray-900">{story.title}</div>
-            {/* Story date */}
             <div className="text-sm text-[#A43718]">{story.date}</div>
           </div>
-          {/* ======= 2.2 Switch between showing Summary or Continue */}
           {story.completed ? (
-            //==== 2.2.1 button 1
             <button
-              onClick={() => onAction(story, "summary")} // Trigger callback when clicked
+              onClick={() => onAction(story, "summary")}
               className="text-base text-gray-600 underline hover:text-[#3D2304]"
             >
               Summary
             </button>
           ) : (
-            //======= 2.2.2 button 2
             <button
               onClick={() => onAction(story, "continue")}
               className="text-base text-gray-600 underline hover:text-[#3D2304]"
@@ -290,6 +304,7 @@ function ConfirmModal({
 
 /************* Components 5: main Page ***********/
 export default function HistoryPage() {
+  useLockBodyScroll();
   const [stories, setStories] = useState<Story[]>([]);
 
   useEffect(() => {
@@ -300,10 +315,10 @@ export default function HistoryPage() {
           id: c.id,
           title: c.title,
           date: c.updateDate
-            ? new Date(c.updateDate).toLocaleDateString('en-US', {
-                year: 'numeric',
-                month: '2-digit',
-                day: '2-digit',
+            ? new Date(c.updateDate).toLocaleDateString("en-US", {
+                year: "numeric",
+                month: "2-digit",
+                day: "2-digit",
               })
             : "",
           imageUrl: "/Griff.png", // Replace with c.imageUrl if available
@@ -365,6 +380,27 @@ export default function HistoryPage() {
     }
   };
 
+  // 删除函数：带确认提示
+  const handleDelete = (story: Story) => {
+    if (
+      window.confirm(
+        `Are you sure you want to delete "${story.title}"? This action cannot be undone.`
+      )
+    ) {
+      // 1️⃣ 从本地删除
+      setStories((prev) => prev.filter((s) => s.id !== story.id));
+      // 2️⃣ 通知后端删除
+      fetch(`/api/data?id=${story.id}`, { method: "DELETE" })
+        .then((res) => {
+          if (!res.ok) throw new Error("Failed to delete record");
+        })
+        .catch((err) => console.error("Delete failed:", err));
+    } else {
+      // 用户取消
+      console.log("Delete canceled");
+    }
+  };
+
   /******** View structure and styles *******/
   return (
     <div className="min-h-screen text-white relative">
@@ -384,7 +420,7 @@ export default function HistoryPage() {
       <TopBar />
 
       {/* Stage：改为容器 + 内边距，不再 absolute+calc */}
-      <main className="mx-auto max-w-[1200px] px-4 sm:px-6 lg:px-8 pt-28 pb-16 flex flex-col items-center">
+      <main className="mx-auto max-w-[1200px] px-4 sm:px-6 lg:px-8 pt-6 pb-16 flex flex-col items-center">
         {/*Title + Dropdown menu*/}
         <HistoryFilter value={activeTab} onChange={setActiveTab} />
 
@@ -397,7 +433,12 @@ export default function HistoryPage() {
             {/* Responsive grid: 3 columns, center aligned, 24px gap between cards */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 justify-items-center">
               {current.map((s) => (
-                <CardDisplay key={s.id} story={s} onAction={handleAction} />
+                <CardDisplay
+                  key={s.id}
+                  story={s}
+                  onAction={handleAction}
+                  onDelete={(story) => handleDelete(story)}
+                />
               ))}
             </div>
           </div>

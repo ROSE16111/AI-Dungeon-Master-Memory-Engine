@@ -404,7 +404,11 @@ const CharacterCarouselStacked = forwardRef(function CharacterCarouselStacked(
           <motion.div
             key={data.name}
             className="absolute"
-            style={{ ...s, transform: hintOn ? "scale(1.03)" : undefined, transition: "transform 420ms ease-out" }}
+            style={{
+              ...s,
+              transform: hintOn ? "scale(1.03)" : undefined,
+              transition: "transform 420ms ease-out",
+            }}
             custom={direction}
             initial="initial"
             animate="animate"
@@ -529,10 +533,7 @@ const CharacterCarouselStacked = forwardRef(function CharacterCarouselStacked(
     }
     // Left/right cards: no animation
     return (
-      <div
-        className="absolute"
-        style={{ ...s }}
-      >
+      <div className="absolute" style={{ ...s }}>
         <div className="h-full w-full [perspective:1200px] rounded-[20px]">
           <div
             className="relative h-full w-full rounded-[20px] transition-transform duration-500 [transform-style:preserve-3d] shadow-[0_22px_74px_rgba(0,0,0,0.6)]"
@@ -543,7 +544,10 @@ const CharacterCarouselStacked = forwardRef(function CharacterCarouselStacked(
             {/* Front */}
             <div
               className="absolute inset-0 rounded-[20px] border border-[#E9E9E9] [backface-visibility:hidden] overflow-hidden"
-              style={{ background: type === "left" || type === "right" ? "#FFFFFF" : undefined }}
+              style={{
+                background:
+                  type === "left" || type === "right" ? "#FFFFFF" : undefined,
+              }}
             >
               <div
                 className="absolute"
@@ -1256,6 +1260,15 @@ function escapeHtml(s: string) {
 }
 
 export default function RecordPage() {
+  useEffect(() => {
+    const sess = (window as any).__asrSession;
+    if (sess?.ws instanceof WebSocket) {
+      console.log("[ASR] Rebinding handlers to existing WS session");
+      bindWsHandlers(sess.ws); // ← 关键：把你刚才的 onmessage 换成新的
+      setIsRecording(sess.ws.readyState === WebSocket.OPEN);
+    }
+  }, []);
+
   useLockBodyScroll();
   // const { transcript, setTranscript } = useTranscript();
   const { transcript, summary, setTranscript, setSummary } = useTranscript();
@@ -1405,8 +1418,137 @@ export default function RecordPage() {
     return `${proto}://${window.location.hostname}:8000/audio`;
   }
 
+  function bindWsHandlers(ws: WebSocket) {
+    ws.binaryType = "arraybuffer";
+
+    ws.onopen = () => {
+      console.log("[ASR] WS open, recording started");
+      setIsRecording(true);
+    };
+
+    ws.onclose = () => {
+      console.log("[ASR] WS close");
+      setIsRecording(false);
+    };
+
+    ws.onerror = (e) => {
+      console.error("[ASR] WS error", e);
+      setIsRecording(false);
+    };
+
+    ws.onmessage = (ev) => {
+      try {
+        // 1) 统一拿字符串
+        const raw =
+          typeof ev.data === "string"
+            ? ev.data
+            : ev.data instanceof ArrayBuffer
+            ? new TextDecoder().decode(ev.data)
+            : String(ev.data);
+
+        // 2) 可能一帧多条、可能带日志前缀；逐行解析
+        const lines = raw
+          .split(/\r?\n/)
+          .map((s) => s.trim())
+          .filter(Boolean);
+
+        for (const line of lines) {
+          // 截取最后一个花括号 payload（去掉类似 "[WS] actually sent -> " 的前缀）
+          const m = line.match(/\{.*\}$/);
+          const candidate = m ? m[0] : line;
+
+          let data: any;
+          try {
+            data = JSON.parse(candidate);
+          } catch (e) {
+            console.error("[ASR] JSON parse fail:", e, "raw:", line);
+            continue;
+          }
+
+          // 3) —— 归一化开始 —— //
+          // 3.1 键名去空格（防止 "summary_item " 这种）
+          if (data && typeof data === "object" && !Array.isArray(data)) {
+            for (const k of Object.keys(data)) {
+              const nk = k.trim();
+              if (nk !== k) {
+                data[nk] = data[k];
+                delete (data as any)[k];
+              }
+            }
+          }
+
+          // 3.2 如果是 {"": {...}}，提出来
+          if (
+            data &&
+            typeof data === "object" &&
+            "" in data &&
+            typeof data[""] === "object"
+          ) {
+            data = data[""];
+          }
+
+          // 3.3 常见包装 {"data": {...}}
+          if (
+            data &&
+            typeof data === "object" &&
+            "data" in data &&
+            typeof data.data === "object"
+          ) {
+            data = data.data;
+          }
+
+          // 3.4 如果 value 又是 JSON 字符串（二次 JSON），再解一次
+          for (const k of ["summary_item", "summary", "final", "partial"]) {
+            if (
+              typeof data?.[k] === "string" &&
+              /^[\[{].*[\]}]$/.test(data[k])
+            ) {
+              try {
+                data[k] = JSON.parse(data[k]);
+              } catch {}
+            }
+          }
+          // —— 归一化结束 —— //
+
+          console.log("[ASR] WS message (normalized):", data);
+
+          // 4) transcript
+          if (typeof data.partial === "string" && data.partial.trim()) {
+            setTranscript((prev) => (prev ? prev + "\n" : "") + data.partial);
+          }
+          if (typeof data.final === "string" && data.final.trim()) {
+            setTranscript((prev) => (prev ? prev + "\n" : "") + data.final);
+          }
+
+          // 5) 兼容旧字段 summary
+          if (typeof data.summary === "string" && data.summary.trim()) {
+            setSummary(data.summary.trim());
+          }
+
+          // 6) 新字段 summary_item（标题 + 正文）
+          const si = data.summary_item;
+          if (si && typeof si === "object" && typeof si.text === "string") {
+            const t = (si.title || "Update").trim?.() ?? "Update";
+            const b = si.text.trim();
+            if (b) {
+              setSummary((prev) =>
+                prev ? `${prev}\n\n${t}\n${b}` : `${t}\n${b}`
+              );
+              console.log("[ASR] appended summary_item");
+            }
+          }
+        }
+      } catch (e) {
+        console.error("[ASR] onmessage handler error:", e, ev.data);
+      }
+    };
+  }
+
   // START recording
   const startRecording = async () => {
+    setSummary("");
+    setTranscript("");
+
     if (isRecording) return;
 
     try {
@@ -1449,36 +1591,39 @@ export default function RecordPage() {
       node.connect(sink).connect(ctx.destination);
 
       // WebSocket
-      const ws = new WebSocket(
-        (function () {
-          if (
-            typeof process !== "undefined" &&
-            process.env.NEXT_PUBLIC_ASR_WS
-          ) {
-            return process.env.NEXT_PUBLIC_ASR_WS!;
-          }
-          const proto = window.location.protocol === "https:" ? "wss" : "ws";
-          return `${proto}://${window.location.hostname}:8000/audio`;
-        })()
-      );
-      ws.binaryType = "arraybuffer";
+      // const ws = new WebSocket(
+      //   (function () {
+      //     if (
+      //       typeof process !== "undefined" &&
+      //       process.env.NEXT_PUBLIC_ASR_WS
+      //     ) {
+      //       return process.env.NEXT_PUBLIC_ASR_WS!;
+      //     }
+      //     const proto = window.location.protocol === "https:" ? "wss" : "ws";
+      //     return `${proto}://${window.location.hostname}:8000/audio`;
+      //   })()
+      // );
+      // 1) 创建 WS（建议用你已经写好的 wsURL()）
+      const ws = new WebSocket(wsURL());
 
+      // 2) 绑定统一的事件处理器（open/close/error/message 全在里面）
+      bindWsHandlers(ws);
+
+      // 3) 仍然保留队列 + flush 逻辑（改为 addEventListener，不会覆盖 bindWsHandlers 的 onopen）
       const queue: ArrayBuffer[] = [];
       let open = false;
 
-      ws.onopen = () => {
+      ws.addEventListener("open", () => {
         open = true;
-
         while (queue.length) {
           const buf = queue.shift()!;
           try {
             ws.send(buf);
           } catch {}
         }
-        setIsRecording(true);
-        console.log("[ASR] WS open, recording started");
-      };
+      });
 
+      // 4) audio worklet 采样/发送逻辑保持原样
       node.port.onmessage = (ev) => {
         const ab = ev.data as ArrayBuffer;
         if (open && ws.readyState === WebSocket.OPEN) {
@@ -1493,30 +1638,7 @@ export default function RecordPage() {
       node.port.onmessageerror = (e) =>
         console.warn("[ASR] worklet port message error", e);
 
-      ws.onmessage = (ev) => {
-        try {
-          const data = JSON.parse(ev.data as string);
-          if (typeof data.partial === "string" && data.partial.trim()) {
-            setTranscript((prev) => (prev ? prev + "\n" : "") + data.partial);
-          }
-          if (typeof data.final === "string" && data.final.trim()) {
-            setTranscript((prev) => (prev ? prev + "\n" : "") + data.final);
-          }
-          if (typeof data.summary === "string" && data.summary.trim()) {
-            setSummary(data.summary);
-          }
-        } catch {}
-      };
-
-      ws.onclose = () => {
-        console.log("[ASR] WS close");
-        setIsRecording(false);
-      };
-      ws.onerror = (e) => {
-        console.error("[ASR] WS error", e);
-        setIsRecording(false);
-      };
-
+      // 5) 存回全局句柄
       (window as any).__asrSession = { ctx, source, node, sink, ws, stream };
     } catch (err) {
       console.error(err);
@@ -1618,61 +1740,75 @@ export default function RecordPage() {
     const fetchRoles = async () => {
       try {
         setCharLoading(true);
-        console.log('Getting current campaign from cookie...');
-        
+        console.log("Getting current campaign from cookie...");
+
         // First, get the current campaign from cookie
         const currentCampaignRes = await fetch("/api/current-campaign");
         if (!currentCampaignRes.ok) {
-          throw new Error('Failed to get current campaign');
+          throw new Error("Failed to get current campaign");
         }
-        
+
         const currentCampaignData = await currentCampaignRes.json();
-        console.log('Current campaign from cookie:', currentCampaignData);
-        
+        console.log("Current campaign from cookie:", currentCampaignData);
+
         if (!currentCampaignData.id) {
-          console.log('No current campaign set');
-          setCharItems([{
-            name: "No Campaign Selected",
-            img: "/Griff.png",
-            details: "No campaign selected. Please go to login and select a campaign first!"
-          }]);
+          console.log("No current campaign set");
+          setCharItems([
+            {
+              name: "No Campaign Selected",
+              img: "/Griff.png",
+              details:
+                "No campaign selected. Please go to login and select a campaign first!",
+            },
+          ]);
           return;
         }
 
         setCurrentCampaignId(currentCampaignData.id);
-        
+
         // Now get all campaigns with their roles to find the current one
         const res = await fetch("/api/data");
         if (!res.ok) {
           throw new Error(`HTTP error! status: ${res.status}`);
         }
-        
+
         const data = await res.json();
-        console.log('All campaigns data:', data);
-        
+        console.log("All campaigns data:", data);
+
         if (!data.campaigns || data.campaigns.length === 0) {
-          console.log('No campaigns found in database');
-          setCharItems([{
-            name: "No Campaigns",
-            img: "/Griff.png",
-            details: "No campaigns found. Please create a campaign first!"
-          }]);
+          console.log("No campaigns found in database");
+          setCharItems([
+            {
+              name: "No Campaigns",
+              img: "/Griff.png",
+              details: "No campaigns found. Please create a campaign first!",
+            },
+          ]);
           return;
         }
 
         // Find the current campaign by ID
-        const currentCampaign = data.campaigns.find((c: any) => c.id === currentCampaignData.id);
+        const currentCampaign = data.campaigns.find(
+          (c: any) => c.id === currentCampaignData.id
+        );
         if (!currentCampaign) {
-          console.log('Current campaign not found in database');
-          setCharItems([{
-            name: "Campaign Not Found",
-            img: "/Griff.png",
-            details: `Campaign with ID "${currentCampaignData.id}" not found. Please select a valid campaign.`
-          }]);
+          console.log("Current campaign not found in database");
+          setCharItems([
+            {
+              name: "Campaign Not Found",
+              img: "/Griff.png",
+              details: `Campaign with ID "${currentCampaignData.id}" not found. Please select a valid campaign.`,
+            },
+          ]);
           return;
         }
 
-        console.log('Using campaign:', currentCampaign.title, 'with roles:', currentCampaign.roles);
+        console.log(
+          "Using campaign:",
+          currentCampaign.title,
+          "with roles:",
+          currentCampaign.roles
+        );
 
         // Extract roles from the current campaign
         if (currentCampaign.roles && currentCampaign.roles.length > 0) {
@@ -1680,29 +1816,42 @@ export default function RecordPage() {
           const transformedRoles = currentCampaign.roles.map((role: any) => ({
             name: role.name,
             img: "/Griff.png", // Default image, you can enhance this later
-            details: `Level ${role.level} character. ${role.description || 'No description available.'}`
+            details: `Level ${role.level} character. ${
+              role.description || "No description available."
+            }`,
           }));
-          
-          console.log('Setting char items for campaign', currentCampaign.title, ':', transformedRoles);
+
+          console.log(
+            "Setting char items for campaign",
+            currentCampaign.title,
+            ":",
+            transformedRoles
+          );
           setCharItems(transformedRoles);
         } else {
-          console.log('No roles found in current campaign');
-          setCharItems([{
-            name: "No Characters",
-            img: "/Griff.png",
-            details: `No characters found in campaign "${currentCampaign.title}". Create some roles first!`
-          }]);
+          console.log("No roles found in current campaign");
+          setCharItems([
+            {
+              name: "No Characters",
+              img: "/Griff.png",
+              details: `No characters found in campaign "${currentCampaign.title}". Create some roles first!`,
+            },
+          ]);
         }
       } catch (error) {
-        console.error('Error fetching roles:', error);
+        console.error("Error fetching roles:", error);
         // Fallback to default data on error
-        setCharItems([{
-          name: "Error Loading",
-          img: "/Griff.png", 
-          details: `Failed to load characters: ${error instanceof Error ? error.message : 'Unknown error'}`
-        }]);
+        setCharItems([
+          {
+            name: "Error Loading",
+            img: "/Griff.png",
+            details: `Failed to load characters: ${
+              error instanceof Error ? error.message : "Unknown error"
+            }`,
+          },
+        ]);
       } finally {
-        console.log('Setting loading to false');
+        console.log("Setting loading to false");
         setCharLoading(false);
       }
     };
@@ -1835,11 +1984,14 @@ export default function RecordPage() {
                 />
               </div>
               <button
-                onClick={() => currentCampaignId && router.push(`/campaigns/${currentCampaignId}/summary`)}
+                onClick={() =>
+                  currentCampaignId &&
+                  router.push(`/campaigns/${currentCampaignId}/summary`)
+                }
                 className="ml-45 mt-6 font-bold text-[#3D2304] underline hover:text-[#A43718] cursor-pointer disabled:opacity-50"
                 disabled={!currentCampaignId}
               >
-                Get Summary
+                End Session
               </button>
             </div>
           </div>
