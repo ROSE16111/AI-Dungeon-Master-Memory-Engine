@@ -1,4 +1,4 @@
-import os, re, json, time, tempfile, shutil
+import os, re, json, time, tempfile, shutil, sys
 from typing import List, Optional, Dict, Any, Union
 from contextlib import asynccontextmanager
 
@@ -15,6 +15,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 
+from typing import Callable, Optional
+
+# Fix OpenMP library conflict
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+import queue
+import threading
+from typing import List, Dict
+import sounddevice as sd
+from datetime import datetime
+
+
+
 # =====================================================================
 # SETTINGS & GLOBAL CONFIG
 # =====================================================================
@@ -25,13 +37,16 @@ SILENCE_END_MS = 600
 PARTIAL_INTERVAL = 0.9
 OVERLAP_SEC = 0.2
 
+SUMMARY_CHUNK_CHARS = int(os.getenv("SUMMARY_CHUNK_CHARS", "50"))
+
+
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small")
 WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "cpu")
 WHISPER_COMPUTE = os.getenv("WHISPER_COMPUTE", "int8")
 LANG = os.getenv("ASR_LANG", "en")
 
 BEAM = int(os.getenv("BEAM", "1"))
-TEMP = float(os.getenv("TEMP", "0.0"))
+TEMP = 0.0
 
 DB_PATH = os.getenv("CHROMA_DB_PATH", "./chroma_db")
 COLLECTION_NAME = os.getenv("CHROMA_COLLECTION", "docs")
@@ -58,26 +73,47 @@ ANSWER_ECHO_ONLY = os.getenv("ANSWER_ECHO_ONLY", "0") == "1"
 # =====================================================================
 # SHARED CLIENTS (Whisper, VAD)
 # =====================================================================
+
+
+
 print("[Init] Loading Whisper model…")
 whisper = WhisperModel(WHISPER_MODEL, device=WHISPER_DEVICE, compute_type=WHISPER_COMPUTE)
 vad = webrtcvad.Vad(2)
 
 # =====================================================================
-# EMBEDDING FUNCTION (Ollama)
+# EMBEDDING FUNCTION (Ollama) — tolerant to Chroma EF API changes
 # =====================================================================
 AllowedMeta = Union[str, int, float, bool]
 
 class OllamaEmbeddingFunction:
+    """
+    Works with older Chroma (calls __call__) and newer Chroma
+    (calls embed_query/embed_documents with input=...).
+    """
     def __init__(self, base_url: str = OLLAMA_URL, model: str = EMBED_MODEL, timeout: int = 60):
-        self.base_url, self.model, self.timeout = base_url.rstrip("/"), model, timeout
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.timeout = timeout
 
     def name(self) -> str:
         return f"ollama::{self.model}"
 
-    # IMPORTANT: Chroma expects the param to be named **input**
+    # Back-compat: some Chroma versions call __call__(input=[...])
     def __call__(self, input: List[str]) -> List[List[float]]:
-        # Coerce to list if a single string was passed
         texts = [input] if isinstance(input, str) else input
+        return self._embed(texts)
+
+    # Newer Chroma interface (accepts input=..., **kwargs for future-proof)
+    def embed_documents(self, input: List[str], **kwargs) -> List[List[float]]:
+        texts = [input] if isinstance(input, str) else input
+        return self._embed(texts)
+
+    # Some Chroma builds expect a BATCH shape back ([[...]]), not a flat list.
+    def embed_query(self, input: Union[str, List[str]], **kwargs) -> List[List[float]]:
+        text = input[0] if isinstance(input, list) else input
+        return self._embed([text])
+
+    def _embed(self, texts: List[str]) -> List[List[float]]:
         out: List[List[float]] = []
         for t in texts:
             r = requests.post(
@@ -94,6 +130,45 @@ class OllamaEmbeddingFunction:
         return out
 
 ef = OllamaEmbeddingFunction()
+
+def embed_query_batched(text: str) -> List[List[float]]:
+    """
+    Version-agnostic query embedding:
+    - Try ef.embed_query(input=...)
+    - Fallback to ef.embed_query(...)
+    - Fallback to ef([text]) (old __call__)
+    - Last resort: call Ollama HTTP directly
+    Always returns [[float]].
+    """
+    # Try various EF call styles
+    try:
+        vec = ef.embed_query(input=text)
+    except TypeError:
+        try:
+            vec = ef.embed_query(text)
+        except Exception:
+            try:
+                vec = ef([text])
+            except Exception:
+                # direct HTTP fallback
+                r = requests.post(
+                    f"{OLLAMA_URL.rstrip('/')}/api/embeddings",
+                    json={"model": EMBED_MODEL, "prompt": text},
+                    timeout=OLLAMA_TIMEOUT,
+                )
+                r.raise_for_status()
+                emb = r.json().get("embedding")
+                vec = [emb] if emb else None
+
+    if vec is None:
+        raise RuntimeError("Failed to obtain query embedding.")
+
+    # Normalize to batch shape
+    if isinstance(vec, list) and vec and isinstance(vec[0], float):
+        return [vec]  # [float] -> [[float]]
+    if isinstance(vec, list) and vec and isinstance(vec[0], list):
+        return vec    # already [[float]]
+    raise RuntimeError(f"Unexpected embedding shape from EF: {type(vec)}")
 
 # =====================================================================
 # CHROMA BOOTSTRAP (auto-create & self-heal)
@@ -230,29 +305,118 @@ def transcribe_float32(wave_f32: np.ndarray) -> str:
     )
     return "".join(s.text for s in segs).strip()
 
+
 def summarize_with_ollama(text: str, model: str = OLLAMA_SUMMARY_MODEL) -> str:
+    # 要求“第一行标题、后面要点”，固定输出格式
+
+    prompt = (
+        "You are a meeting note summarization assistant. "
+        "Summarize the following transcript into English. "
+        "The first line should be the title itself only (no 'Title:' prefix or any leading symbols). "
+        "From the second line, write 2–5 concise points (one per line, no markdown bullets or special symbols). "
+        f"\n\nTranscript:\n{text}"
+    )
+
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "stream": False,
+        "keep_alive": "1h",
+        "options": {
+            "temperature": 0.2,
+            # 需要更稳定可以再加：
+            # "top_p": 0.9, "repeat_penalty": 1.05
+        },
+    }
+
     try:
         resp = requests.post(
             f"{OLLAMA_URL.rstrip('/')}/api/generate",
             headers={"Content-Type": "application/json"},
-            json={
-                "model": model,
-                "prompt": f"Summarize the following transcript into concise bullet points:\n\n{text}",
-                "stream": False,
-                "keep_alive": "1h",
-            },
+            json=payload,
             timeout=OLLAMA_TIMEOUT,
         )
-        if resp.ok:
-            data = resp.json()
-            return (data.get("response") or "").strip()
-        return f"[Error] Ollama HTTP {resp.status_code}"
+        resp.raise_for_status()
+        data = resp.json()
+        out = (data.get("response") or "").strip()
+        return out
+    except requests.RequestException as e:
+        return f"[Error] Ollama HTTP: {e}"
     except Exception as e:
         return f"[Error] {e}"
 
-# =====================================================================
-# MODELS
-# =====================================================================
+
+class RollingSummarizer:
+    """
+    把连续传入的文本按固定长度切成块（默认每100字），
+    对每块调用 summarizer（如：summarize_with_ollama）产生一段“标题+要点”。
+    push() 可能一次返回 0~多段；flush() 返回剩余不足一块的尾段（如有）。
+    """
+    def __init__(
+        self,
+        threshold_chars: int = SUMMARY_CHUNK_CHARS,
+        fn: Optional[Callable[[str], str]] = None,
+        cooldown_sec: float = 0.0,
+    ):
+        self.threshold = max(1, int(threshold_chars))
+        self.fn = fn or (lambda s: s)
+        self.cooldown_sec = cooldown_sec
+        self._buf: list[str] = []
+        self._last_t = 0.0
+
+    def _split_on_sentence(self, s: str, hard_len: int) -> int:
+        """
+        为了读起来更像句子，优先在块末 40 字内找句号/问号/叹号切分；
+        找不到就用硬阈值 hard_len。返回切分位置（包含该标点）。
+        """
+        if len(s) < hard_len:
+            return 0
+        chunk = s[:hard_len]
+        tail = chunk[-40:]
+        for p in ("。", "！", "？", ".", "!", "?"):
+            i = tail.rfind(p)
+            if i != -1:
+                return (hard_len - len(tail)) + i + 1
+        return hard_len
+
+    def push(self, text: str) -> list[str]:
+        self._buf.append(text or "")
+        s = "".join(self._buf)
+        out: list[str] = []
+
+        # 轻微防抖（与原逻辑一致）
+        import time as _t
+        if self.cooldown_sec and (_t.time() - self._last_t) < self.cooldown_sec and len(s) < self.threshold:
+            return out
+
+        while len(s) >= self.threshold:
+            cut = self._split_on_sentence(s, self.threshold)
+            chunk, s = s[:cut], s[cut:]
+            try:
+                seg = (self.fn(chunk) or "").strip()
+                if seg:
+                    out.append(seg)
+            except Exception as e:
+                out.append(f"[Error summarizing chunk] {e}")
+
+        self._buf = [s]
+        self._last_t = _t.time()
+        return out
+
+    def flush(self) -> str:
+        """把剩余不足一块的尾巴也总结一次"""
+        s = "".join(self._buf).strip()
+        self._buf = []
+        if not s:
+            return ""
+        try:
+            return (self.fn(s) or "").strip()
+        except Exception as e:
+            return f"[Error summarizing tail] {e}"
+
+
+
+
 class IngestTranscriptRequest(BaseModel):
     id_prefix: str
     text: str
@@ -347,8 +511,14 @@ def ingest(req: IngestRequest):
 @app.post("/query")
 def query(req: QueryRequest):
     ensure_collection()
+    # Version-agnostic embedding at query time
+    try:
+        qbatch = embed_query_batched(req.query)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Query embedding failed: {e}")
+
     res = collection.query(
-        query_texts=[req.query],
+        query_embeddings=qbatch,
         n_results=req.top_k,
         where=req.where,
         include=["documents", "metadatas", "distances"],
@@ -376,8 +546,14 @@ def answer(req: AnswerRequest):
     ensure_collection()
     effective_where = req.where if (req.where and len(req.where)) else {"type": "raw"}
 
+    # Version-agnostic embedding at query time
+    try:
+        qbatch = embed_query_batched(req.question)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Query embedding failed: {e}")
+
     res = collection.query(
-        query_texts=[req.question],
+        query_embeddings=qbatch,
         n_results=req.top_k,
         where=effective_where,
         include=["documents", "metadatas", "distances"],
@@ -469,34 +645,62 @@ def answer(req: AnswerRequest):
 # =====================================================================
 # RECORDING / STT: WS STREAMING + FILE UPLOAD
 # =====================================================================
+
+def strip_md(s: str) -> str:
+    # 去掉每行开头的 Markdown 标题符号 ### / ## / #
+    s = re.sub(r'(?m)^\s*#{1,6}\s*', '', s)
+    # 去掉成对粗体/斜体符号 **text**、__text__、*text*、_text_
+    s = re.sub(r'(\*\*|__)(.*?)\1', r'\2', s)
+    s = re.sub(r'(\*|_)(.*?)\1', r'\2', s)
+    # 去掉列表前缀 - / * / 数字.
+    s = re.sub(r'(?m)^\s*[-*]\s+', '', s)
+    s = re.sub(r'(?m)^\s*\d+\.\s+', '', s)
+    return s
+
+
+# =====================================================================
+# RECORDING / STT: WS STREAMING + FILE UPLOAD
+# =====================================================================
 async def handle_audio_ws(websocket: WebSocket):
     print("[WS] connected")
-    try:
-        await websocket.send_text(json.dumps({"partial": "[listening…]"}))
-    except Exception:
-        pass
 
     speaking = False
-    last_voice = 0.0
+    last_voice = time.time()           # 最近一次检测到“语音”的时间
     last_partial_t = 0.0
     last_partial_text = ""
     tail = np.zeros(int(OVERLAP_SEC * SAMPLE_RATE), dtype=np.int16)
     buf: List[np.ndarray] = []
     now = lambda: time.time()
-    cache_text = ""
+
+    LISTENING_HINT_DELAY = 0.8         # 连续静音 ≥ 0.8s 才提示 listening
+    listening_sent = False             # 当前这段静音中是否已经发过 listening
+
+    # 滚动摘要器：请确保你已将 RollingSummarizer 替换为“按固定长度分块”的版本
+    rolling = RollingSummarizer(
+        threshold_chars=SUMMARY_CHUNK_CHARS,   # 例如 100，来自环境变量或常量
+        fn=summarize_with_ollama,              # 英文标题+要点，且禁止输出 'Title:' 前缀
+        cooldown_sec=2.0,                      # 轻微防抖，可按需调整
+    )
+
+    # 累计所有已产生的“段落摘要”（原样使用模型输出，不添加 Markdown）
+    summary_accum: list[str] = []
 
     try:
         while True:
             message = await websocket.receive_bytes()
-
             pcm16 = np.frombuffer(message, dtype=np.int16)
+
             if is_speech_int16(pcm16):
+                # —— 一旦检测到语音：进入 speaking，重置 listening 提示状态
                 if not speaking:
                     speaking = True
+                    listening_sent = False  # 下次遇到长静音才会重新发 listening
                     print("[State] speaking started")
+
                 last_voice = now()
                 buf.append(pcm16)
 
+                # 定时发送 partial
                 if now() - last_partial_t >= PARTIAL_INTERVAL:
                     chunk = np.concatenate([tail, *buf]) if buf else tail
                     wave = chunk.astype(np.float32) / 32768.0
@@ -509,7 +713,17 @@ async def handle_audio_ws(websocket: WebSocket):
                     except Exception as e:
                         print(f"[WS] partial failed:", e)
                     last_partial_t = now()
+
             else:
+                # —— 非语音帧：若当前不在 speaking 且静音持续足够久，且还没发过 listening，则发一次
+                if (not speaking) and (now() - last_voice >= LISTENING_HINT_DELAY) and (not listening_sent):
+                    try:
+                        await websocket.send_text(json.dumps({"partial": "[listening…]"}))
+                    except Exception:
+                        pass
+                    listening_sent = True
+
+                # —— 从 speaking 切到静音，并达到“句子结束”阈值：出 final + summary
                 if speaking and (now() - last_voice) * 1000 >= SILENCE_END_MS:
                     speaking = False
                     utter = np.concatenate([tail, *buf]) if buf else tail
@@ -520,18 +734,32 @@ async def handle_audio_ws(websocket: WebSocket):
                             print(f"[final] {final_text}")
                             await websocket.send_text(json.dumps({"final": final_text}))
 
-                            cache_text += (" " if cache_text else "") + final_text
-                            print(f"[cache] len={len(cache_text)}")
-                            if len(cache_text) >= SUMMARY_THRESHOLD_CHARS:
-                                print("[summary] calling Ollama …")
-                                summary = summarize_with_ollama(cache_text)
-                                print(f"[summary]\n{summary}\n")
-                                await websocket.send_text(json.dumps({"summary": summary}))
-                                cache_text = ""
+                            # 注意：rolling.push 现在可能返回“多段” list[str]
+                            segments = rolling.push(final_text)
+
+                            # 兼容字符串或列表两种返回
+                            if isinstance(segments, str):
+                                segments = [segments] if segments else []
+                            elif not isinstance(segments, list):
+                                segments = []
+
+                            # 逐段累计（原样使用模型输出，不强加 Markdown）
+                            new_added = False
+                            for seg in segments:
+                                seg = (seg or "").strip()
+                                if not seg:
+                                    continue
+                                summary_accum.append(seg)
+                                new_added = True
+
+                            # 一次性把累计文本发给前端（覆盖为“完整历史”）
+                            if new_added:
+                                full_summary = "\n\n".join(summary_accum)
+                                await websocket.send_text(json.dumps({"summary": full_summary}))
                     except Exception as e:
                         print(f"[WS] final failed:", e)
 
-                    # roll tail
+                    # 更新 tail / 缓存，准备下一轮
                     if utter.size >= tail.size:
                         tail = utter[-tail.size:].copy()
                     else:
@@ -540,12 +768,28 @@ async def handle_audio_ws(websocket: WebSocket):
                     buf.clear()
                     last_partial_text = ""
                     last_partial_t = now()
+
     except WebSocketDisconnect:
         print("[WS] disconnected")
+        # 断开前把剩余不足一块的尾巴也总结一次
+        try:
+            leftover = rolling.flush()
+            # flush 可能是空串 / 字符串
+            if leftover:
+                summary_accum.append(leftover.strip())
+                full_summary = "\n\n".join(summary_accum)
+                await websocket.send_text(json.dumps({"summary": full_summary}))
+        except Exception:
+            pass
         return
+
     except Exception as e:
         print("[WS] error:", e)
         return
+
+
+
+
 
 @app.websocket("/ws/audio")
 async def ws_audio(websocket: WebSocket):
@@ -588,4 +832,4 @@ async def transcribe(file: UploadFile = File(...)):
 if __name__ == "__main__":
     # Ensure DB path exists at boot
     os.makedirs(DB_PATH, exist_ok=True)
-    uvicorn.run("server:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")), reload=False)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")), reload=False)
