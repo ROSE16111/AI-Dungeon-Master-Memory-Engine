@@ -489,15 +489,11 @@ function CharacterCarouselStacked({
       .then((data) => {
         console.log('API response data:', data);
         if (data.roles && Array.isArray(data.roles)) {
-          const processedRoles = data.roles.map((role: any) => {
-            console.log(`Character "${role.name}" image data:`, role.img ? role.img.substring(0, 50) + '...' : 'NO IMAGE');
-            return {
-              name: role.name,
-              img: role.img || "/Griff.png",
-              details: role.details || `Level ${role.level || 1} character. No detailed description available yet.`
-            };
-          });
-          setItems(processedRoles);
+          setItems(data.roles.map((role: any) => ({
+            name: role.name,
+            img: role.img || "/Griff.png",
+            details: role.details || `Level ${role.level || 1} character. No detailed description available yet.`
+          })));
         } else {
           setItems([]);
         }
