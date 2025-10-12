@@ -59,6 +59,15 @@ export async function POST(req: Request) {
       campaign = await prisma.campaign.findUnique({ where: { id: body.campaignId } });
     }
 
+<<<<<<< HEAD
+=======
+    // Prefer explicit campaignId if provided (client may pass it), else use title lookup/create
+    let campaign = null;
+    if (body.campaignId) {
+      campaign = await prisma.campaign.findUnique({ where: { id: body.campaignId } });
+    }
+
+>>>>>>> 988fdc3 (update summary edit part history page)
     const campaignTitle = (body.title || "Untitled Campaign").trim();
     if (!campaign) {
       campaign = await prisma.campaign.findFirst({ where: { title: campaignTitle } });
@@ -126,6 +135,7 @@ export async function POST(req: Request) {
         },
       });
     }
+<<<<<<< HEAD
 
     const createdCharacterSummaries = [];
     for (const card of characters) {
@@ -150,6 +160,8 @@ export async function POST(req: Request) {
         createdCharacterSummaries.push({ id: row.id, name: card.name });
       } catch { /* continue */ }
 }
+=======
+>>>>>>> 988fdc3 (update summary edit part history page)
 
     // Update campaign updateDate again (in case only summary is updated)
     await prisma.campaign.update({

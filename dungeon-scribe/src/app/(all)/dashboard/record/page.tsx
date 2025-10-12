@@ -1658,6 +1658,7 @@ export default function RecordPage() {
     const existing = (window as any).__asrSession || null;
     if (existing && (existing as any).paused) {
       try {
+<<<<<<< HEAD
           const ws = existing.ws;
           const node = existing.node;
           // Re-bind WS handlers to resume receiving results
@@ -1689,6 +1690,31 @@ export default function RecordPage() {
           console.warn("Failed to resume paused session, starting fresh", e);
         }
       }
+=======
+        const ws = existing.ws;
+        const node = existing.node;
+        // Re-bind WS handlers to resume receiving results
+        if (ws instanceof WebSocket) bindWsHandlers(ws);
+        // Re-attach worklet send handler so audio resumes being sent
+        if (node && node.port) {
+          node.port.onmessage = (ev: any) => {
+            const ab = ev.data as ArrayBuffer;
+            try {
+              if (ws && ws.readyState === WebSocket.OPEN) ws.send(ab);
+            } catch {}
+          };
+          node.port.onmessageerror = (e: any) =>
+            console.warn("[ASR] worklet port message error", e);
+        }
+        (existing as any).paused = false;
+        setIsRecording(true);
+        console.log("[ASR] resumed paused session");
+        return;
+      } catch (e) {
+        console.warn("Failed to resume paused session, starting fresh", e);
+      }
+    }
+>>>>>>> 988fdc3 (update summary edit part history page)
 
     try {
       // ask for mic
@@ -1803,11 +1829,19 @@ export default function RecordPage() {
       }
 
       // Stop processing WS messages locally but don't close the socket; keep it for resume
+<<<<<<< HEAD
       // if (sess?.ws) {
       //   try {
       //     sess.ws.onmessage = null;
       //   } catch {}
       // }
+=======
+      if (sess?.ws) {
+        try {
+          sess.ws.onmessage = null;
+        } catch {}
+      }
+>>>>>>> 988fdc3 (update summary edit part history page)
 
       // Mark session as paused
       if (sess) (sess as any).paused = true;
@@ -1880,7 +1914,10 @@ export default function RecordPage() {
   // End Session: save AI summary to DB (update existing summary if present), cleanup and navigate
   const handleEndSession = async () => {
     // Use stored campaign id and summary from transcript context
+<<<<<<< HEAD
     try { await endStreamAndWait(); } catch {}
+=======
+>>>>>>> 988fdc3 (update summary edit part history page)
     const campaignId = currentCampaignId || null;
     const campaignTitle = (window?.localStorage?.getItem("currentCampaignTitle") || "Untitled Campaign").trim();
     const summaryText = summary || "";
