@@ -215,6 +215,21 @@ export default function LoginPage() {
     if (!canSubmit || !campaign) return;
     try {
       await setCurrentCampaignCookie(campaign, remember); // ← 关键：把选中的 campaign 写入 Cookie
+      // After cookie is set, read back the current campaign id/title and persist to localStorage
+      try {
+        const res = await fetch('/api/current-campaign');
+        if (res.ok) {
+          const json = await res.json();
+          if (typeof window !== 'undefined') {
+            if (json?.id) localStorage.setItem('currentCampaignId', json.id);
+            if (json?.title) localStorage.setItem('currentCampaignTitle', json.title);
+          }
+        }
+      } catch (err) {
+        // Not fatal — pages will still read cookie via server API where supported
+        console.warn('Failed to persist current campaign to localStorage', err);
+      }
+
       // 这里如果你还想同时记住 role，也可以再调一个 /api/current-role 接口写 cookie
       router.push("/dashboard");
     } catch (err: any) {

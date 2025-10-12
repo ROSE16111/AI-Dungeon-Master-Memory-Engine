@@ -2,6 +2,7 @@
 //http://localhost:3000/api/data
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { SummaryType } from "@prisma/client";
 
 // GET Campaign的相关信息或特定Campaign的Roles
 export async function GET(req: NextRequest) {
@@ -91,12 +92,54 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// 创建 Campaign或Role 
+// 创建 Campaign或Role,更改summary
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const { type } = body;
+  const url = new URL(req.url);
+  const typeFromQuery = url.searchParams.get("type");
+  const { type: typeFromBody } = body;
+  const type = (typeFromBody || typeFromQuery) as string | null;
 
   try {
+    // Handle saving/updating a session summary via unified data API
+    if (type === "summary") {
+      const { campaignId, content, summaryId } = body;
+      if (!campaignId || !content) {
+        return NextResponse.json({ error: "campaignId and content are required" }, { status: 400 });
+      }
+
+      const campaign = await prisma.campaign.findUnique({ where: { id: campaignId } });
+      if (!campaign) {
+        return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
+      }
+
+      let summary;
+
+      // If a specific summaryId is provided, prefer updating that record (safer for edits)
+      if (summaryId) {
+        const existing = await prisma.summary.findUnique({ where: { id: summaryId } });
+        if (existing && existing.campaignId === campaignId) {
+          summary = await prisma.summary.update({ where: { id: summaryId }, data: { content } });
+        } else {
+          return NextResponse.json({ error: "Summary not found or does not belong to campaign" }, { status: 404 });
+        }
+      } else {
+        // Otherwise find latest session summary and update it, or create if none
+        const latest = await prisma.summary.findFirst({
+          where: { campaignId, type: SummaryType.session },
+          orderBy: { createdAt: "desc" },
+        });
+
+        if (latest) {
+          summary = await prisma.summary.update({ where: { id: latest.id }, data: { content } });
+        } else {
+          summary = await prisma.summary.create({ data: { type: SummaryType.session, content, campaignId } });
+        }
+      }
+
+      await prisma.campaign.update({ where: { id: campaignId }, data: { updateDate: new Date() } });
+      return NextResponse.json({ ok: true, summary });
+    }
     // 创建Campaign
     if (type === "campaign") {
       const { title } = body;
@@ -150,6 +193,47 @@ export async function POST(req: NextRequest) {
 
   } catch (err) {
     console.error("POST /api/data error:", err);
+    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
+  }
+}
+
+// DELETE a summary or transcript by id
+export async function DELETE(req: NextRequest) {
+  try {
+    const url = new URL(req.url);
+    const id = url.searchParams.get("id");
+    if (!id) {
+      return NextResponse.json({ error: "Missing id" }, { status: 400 });
+    }
+
+    // Try to find and delete a Summary first
+    const existingSummary = await prisma.summary.findUnique({ where: { id } });
+    if (existingSummary) {
+      await prisma.summary.delete({ where: { id } });
+      try {
+        // Update campaign updateDate
+        if (existingSummary.campaignId) {
+          await prisma.campaign.update({ where: { id: existingSummary.campaignId }, data: { updateDate: new Date() } });
+        }
+      } catch {}
+      return NextResponse.json({ ok: true, deleted: { type: "summary", id } });
+    }
+
+    // If not a summary, try AllTxt
+    const existingAll = await prisma.allTxt.findUnique({ where: { id } });
+    if (existingAll) {
+      await prisma.allTxt.delete({ where: { id } });
+      try {
+        if (existingAll.campaignId) {
+          await prisma.campaign.update({ where: { id: existingAll.campaignId }, data: { updateDate: new Date() } });
+        }
+      } catch {}
+      return NextResponse.json({ ok: true, deleted: { type: "allTxt", id } });
+    }
+
+    return NextResponse.json({ error: "Record not found" }, { status: 404 });
+  } catch (err) {
+    console.error("DELETE /api/data error:", err);
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
   }
 }

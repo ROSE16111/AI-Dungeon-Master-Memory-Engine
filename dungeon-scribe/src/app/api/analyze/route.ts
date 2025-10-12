@@ -9,6 +9,8 @@ type AnalyzeBody = {
   title?: string;      
   text: string;       
   source?: "live" | "upload"; 
+  summaryId?: string;
+  campaignId?: string;
 };
 
 /**
@@ -52,13 +54,18 @@ export async function POST(req: Request) {
     }
 
 
-    // Use provided title or fallback to default
-    const campaignTitle = (body.title || "Untitled Campaign").trim();
+    // Prefer explicit campaignId if provided (client may pass it), else use title lookup/create
+    let campaign = null;
+    if (body.campaignId) {
+      campaign = await prisma.campaign.findUnique({ where: { id: body.campaignId } });
+    }
 
-    // Look up existing campaign by title, or create if not found
-    let campaign = await prisma.campaign.findFirst({ where: { title: campaignTitle } });
+    const campaignTitle = (body.title || "Untitled Campaign").trim();
     if (!campaign) {
-      campaign = await prisma.campaign.create({ data: { title: campaignTitle } });
+      campaign = await prisma.campaign.findFirst({ where: { title: campaignTitle } });
+      if (!campaign) {
+        campaign = await prisma.campaign.create({ data: { title: campaignTitle } });
+      }
     }
 
     // Store the raw transcript in the database
@@ -83,14 +90,38 @@ export async function POST(req: Request) {
       summaryBullets ||
       "• Summary unavailable. (LLM produced no output)\n• Check Ollama host/model configuration.";
 
-    // Save summary to database
-    const summary = await prisma.summary.create({
-      data: {
-        type: SummaryType.session,
-        content,  
-        campaignId: campaign.id,
-      },
-    });
+    // Save or update summary in database. If client provided summaryId, update that row.
+    let summary;
+    if (body.summaryId) {
+      // attempt to update existing summary; fall back to create if not found
+      try {
+        summary = await prisma.summary.update({
+          where: { id: body.summaryId },
+          data: {
+            content,
+            campaignId: campaign.id,
+            type: SummaryType.session,
+          },
+        });
+      } catch (e) {
+        // not found or other error -> create new
+        summary = await prisma.summary.create({
+          data: {
+            type: SummaryType.session,
+            content,
+            campaignId: campaign.id,
+          },
+        });
+      }
+    } else {
+      summary = await prisma.summary.create({
+        data: {
+          type: SummaryType.session,
+          content,
+          campaignId: campaign.id,
+        },
+      });
+    }
 
     // Update campaign updateDate again (in case only summary is updated)
     await prisma.campaign.update({

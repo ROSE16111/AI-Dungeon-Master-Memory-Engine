@@ -1546,14 +1546,37 @@ export default function RecordPage() {
 
   // START recording
   const startRecording = async () => {
-    setSummary("");
-    setTranscript("");
+    // Do NOT clear transcript/summary here — keep previous speech-to-text content.
 
     if (isRecording) return;
 
-    try {
-      stopRecording();
-    } catch {}
+    // If a paused session exists, try to resume it instead of creating a new one
+    const existing = (window as any).__asrSession || null;
+    if (existing && (existing as any).paused) {
+      try {
+        const ws = existing.ws;
+        const node = existing.node;
+        // Re-bind WS handlers to resume receiving results
+        if (ws instanceof WebSocket) bindWsHandlers(ws);
+        // Re-attach worklet send handler so audio resumes being sent
+        if (node && node.port) {
+          node.port.onmessage = (ev: any) => {
+            const ab = ev.data as ArrayBuffer;
+            try {
+              if (ws && ws.readyState === WebSocket.OPEN) ws.send(ab);
+            } catch {}
+          };
+          node.port.onmessageerror = (e: any) =>
+            console.warn("[ASR] worklet port message error", e);
+        }
+        (existing as any).paused = false;
+        setIsRecording(true);
+        console.log("[ASR] resumed paused session");
+        return;
+      } catch (e) {
+        console.warn("Failed to resume paused session, starting fresh", e);
+      }
+    }
 
     try {
       // ask for mic
@@ -1647,8 +1670,37 @@ export default function RecordPage() {
     }
   };
 
-  //stop and clear
+  // Pause recording: keep session objects in memory so they can be resumed.
   const stopRecording = () => {
+    const sess = (window as any).__asrSession || null;
+    try {
+      // Remove the worklet send handler so audio stops being sent, but keep streams and context
+      if (sess?.node?.port) {
+        try {
+          sess.node.port.onmessage = null;
+        } catch {}
+        try {
+          sess.node.port.onmessageerror = null;
+        } catch {}
+      }
+
+      // Stop processing WS messages locally but don't close the socket; keep it for resume
+      if (sess?.ws) {
+        try {
+          sess.ws.onmessage = null;
+        } catch {}
+      }
+
+      // Mark session as paused
+      if (sess) (sess as any).paused = true;
+    } finally {
+      setIsRecording(false);
+      console.log("[ASR] paused (session held in memory)");
+    }
+  };
+
+  // Full cleanup: close WS, stop tracks, close AudioContext and remove session (used by end-session)
+  const cleanupRecording = () => {
     const sess = (window as any).__asrSession || null;
     try {
       try {
@@ -1703,27 +1755,64 @@ export default function RecordPage() {
     } finally {
       (window as any).__asrSession = null;
       setIsRecording(false);
-      console.log("[ASR] stopped & cleaned");
+      console.log("[ASR] fully stopped & cleaned");
+    }
+  };
 
-      // === Store transcript and summary in DB ===
-      // Get campaign title from dashboard context or fallback
-      let campaignTitle = "Untitled Campaign";
-      if (typeof window !== "undefined") {
-        // Try to get campaign title from localStorage (set by dashboard)
-        const storedTitle = window.localStorage.getItem("currentCampaignTitle");
-        if (storedTitle) campaignTitle = storedTitle;
+  // End Session: save AI summary to DB (update existing summary if present), cleanup and navigate
+  const handleEndSession = async () => {
+    // Use stored campaign id and summary from transcript context
+    const campaignId = currentCampaignId || null;
+    const campaignTitle = (window?.localStorage?.getItem("currentCampaignTitle") || "Untitled Campaign").trim();
+    const summaryText = summary || "";
+
+    // Try to pick an existing summaryId from localStorage if set by History
+    const existingSummaryId = typeof window !== "undefined" ? window.localStorage.getItem("currentSummaryId") : null;
+
+    try {
+      const payload: any = {
+        text: transcript || "",
+        title: campaignTitle,
+        source: "live",
+      };
+      if (summaryText) payload.summary = summaryText;
+      if (campaignId) payload.campaignId = campaignId;
+      if (existingSummaryId) payload.summaryId = existingSummaryId;
+
+      const res = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        console.error("/api/analyze returned", res.status, await res.text());
+      } else {
+        try {
+          const data = await res.json();
+          // store returned summaryId so the Summary page can load the DB record
+          if (data?.summaryId && typeof window !== "undefined") {
+            window.localStorage.setItem("currentSummaryId", data.summaryId);
+          }
+        } catch (e) {
+          // ignore JSON parse errors
+        }
       }
-      if (transcript && summary && campaignTitle) {
-        fetch("/api/analyze", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            text: transcript,
-            title: campaignTitle,
-            source: "live",
-            summary,
-          }),
-        }).catch((e) => console.error("Failed to save transcript/summary", e));
+    } catch (e) {
+      console.error("Failed to save transcript/summary", e);
+    }
+
+    // Full cleanup and navigate to summary page
+    try {
+      cleanupRecording();
+    } catch (e) {
+      console.warn("cleanup failed", e);
+    }
+
+    if (campaignId) {
+      try {
+        router.push(`/campaigns/${campaignId}/summary`);
+      } catch (e) {
+        console.error("Failed to navigate to summary page", e);
       }
     }
   };
@@ -1984,12 +2073,10 @@ export default function RecordPage() {
                 />
               </div>
               <button
-                onClick={() =>
-                  currentCampaignId &&
-                  router.push(`/campaigns/${currentCampaignId}/summary`)
-                }
+                onClick={() => currentCampaignId && handleEndSession()}
                 className="ml-45 mt-6 font-bold text-[#3D2304] underline hover:text-[#A43718] cursor-pointer disabled:opacity-50"
                 disabled={!currentCampaignId}
+                type="button"
               >
                 End Session
               </button>

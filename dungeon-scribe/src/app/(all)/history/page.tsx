@@ -26,6 +26,8 @@ type Story = {
   date: string;
   imageUrl: string;
   completed: boolean;
+  campaignId?: string | null;
+  sortTime?: number;
 };
 
 // =========== !!!!! Define array to store stories(just demo content,connect with backend)
@@ -193,18 +195,20 @@ function CardDisplay({
       </button>
 
       <div className="relative w-full h-[140px]">
-        <Image
-          src={story.imageUrl}
+        <img
+          src={story.imageUrl || "/Griff.png"}
           alt={story.title}
-          fill
-          className="object-cover"
+          className="object-cover w-full h-full"
+          onError={(e) => {
+            const t = e.currentTarget as HTMLImageElement;
+            if (t.src !== "/Griff.png") t.src = "/Griff.png";
+          }}
         />
       </div>
 
       <div className="px-4 pt-3 pb-3">
         <div className="flex justify-between items-center">
           <div>
-            <div className="text-lg font-bold text-gray-900">{story.title}</div>
             <div className="text-sm text-[#A43718]">{story.date}</div>
           </div>
           {story.completed ? (
@@ -277,9 +281,7 @@ function ConfirmModal({
         <h2 className="text-lg font-bold mb-4">Are you sure?</h2>
         <p className="mb-6">
           {/* ======= 4.1 Description text, changes dynamically based on actionType */}
-          Do you want to{" "}
-          {actionType === "continue" ? "continue" : "view the summary of"} "
-          {story.title}"?
+          Do you want to {actionType === "continue" ? "continue" : "view the summary of this session"}?
         </p>
         <div className="flex justify-end gap-3">
           {/* ==== 4.2 Cancel button */}
@@ -308,24 +310,123 @@ export default function HistoryPage() {
   const [stories, setStories] = useState<Story[]>([]);
 
   useEffect(() => {
-    fetch("/api/data")
-      .then((res) => res.json())
-      .then((data) => {
-        const mapped = (data.campaigns || []).map((c: any) => ({
-          id: c.id,
-          title: c.title,
-          date: c.updateDate
-            ? new Date(c.updateDate).toLocaleDateString("en-US", {
-                year: "numeric",
-                month: "2-digit",
-                day: "2-digit",
-              })
-            : "",
-          imageUrl: "/Griff.png", // Replace with c.imageUrl if available
-          completed: true, // Replace with real field if available
-        }));
-        setStories(mapped);
-      });
+    (async () => {
+      try {
+        // Determine current campaign id (prefer localStorage)
+        let currentCampaignId: string | null = null;
+        if (typeof window !== "undefined") {
+          currentCampaignId = localStorage.getItem("currentCampaignId");
+        }
+        if (!currentCampaignId) {
+          try {
+            const r = await fetch("/api/current-campaign");
+            if (r.ok) {
+              const j = await r.json();
+              currentCampaignId = j?.id || null;
+            }
+          } catch {}
+        }
+
+        if (!currentCampaignId) {
+          // No campaign selected: clear stories
+          setStories([]);
+          return;
+        }
+
+        const res = await fetch("/api/data");
+        const data = await res.json();
+        const campaigns = data.campaigns || [];
+
+        const camp = campaigns.find((c: any) => c.id === currentCampaignId);
+        if (!camp) {
+          setStories([]);
+          return;
+        }
+
+        const records: Story[] = [];
+        const sessionSummaries = Array.isArray(camp.sessionSummaries) ? camp.sessionSummaries : [];
+        for (const s of sessionSummaries) {
+          const ts = s.createdAt ? new Date(s.createdAt).getTime() : (camp.updateDate ? new Date(camp.updateDate).getTime() : Date.now());
+          records.push({
+            id: s.id,
+            title: (s.content || "Untitled Session").split("\n")[0] || camp.title || "Session",
+            date: s.createdAt ? new Date(s.createdAt).toLocaleString() : (camp.updateDate ? new Date(camp.updateDate).toLocaleString() : ""),
+            imageUrl: s.imageBase64 ? `data:image/png;base64,${s.imageBase64}` : "/Griff.png",
+            completed: true,
+            campaignId: camp.id,
+            sortTime: ts,
+          });
+        }
+
+        // Load recentRecords but only include those that refer to this campaign (if they carry campaign info) or dedupe by id
+        let recent: Story[] = [];
+        if (typeof window !== "undefined") {
+          try {
+            const raw = localStorage.getItem("recentRecords");
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              if (Array.isArray(parsed)) {
+                // If recent items include campaignId, filter by it; otherwise include only if id matches an item in records
+                const recordIds = new Set(records.map((r) => r.id));
+                recent = parsed
+                  .filter((r: any) => {
+                    if (r.campaignId) return r.campaignId === currentCampaignId;
+                    return recordIds.has(r.id);
+                  })
+                  .map((r: any) => {
+                    // attempt to parse timestamp from r.date, fallback to now
+                    let ts = Date.now();
+                    try {
+                      if (r.date) {
+                        const t = Date.parse(r.date);
+                        if (!Number.isNaN(t)) ts = t;
+                      } else if (r.createdAt) {
+                        const t = Date.parse(r.createdAt);
+                        if (!Number.isNaN(t)) ts = t;
+                      }
+                    } catch {}
+                    return {
+                      id: r.id,
+                      title: r.title,
+                      date: r.date || new Date(ts).toLocaleString(),
+                      imageUrl: r.imageUrl || "/Griff.png",
+                      completed: r.completed !== undefined ? Boolean(r.completed) : true,
+                      campaignId: r.campaignId || currentCampaignId,
+                      sortTime: ts,
+                    };
+                  });
+              }
+            }
+          } catch (e) {
+            console.warn("Failed to parse recentRecords from localStorage", e);
+          }
+        }
+
+        // Combine recent (preferred) + records, dedupe
+        const ids = new Set<string>();
+        const combined: Story[] = [];
+        for (const r of recent) {
+          if (!ids.has(r.id)) {
+            combined.push(r);
+            ids.add(r.id);
+          }
+        }
+        for (const r of records) {
+          if (!ids.has(r.id)) {
+            combined.push(r);
+            ids.add(r.id);
+          }
+        }
+
+        // Sort combined by sortTime descending (latest first)
+        combined.sort((a, b) => (b.sortTime || 0) - (a.sortTime || 0));
+
+        setStories(combined);
+      } catch (err) {
+        console.error("Failed to load campaigns for history page:", err);
+        setStories([]);
+      }
+    })();
   }, []);
   const router = useRouter();
 
@@ -374,8 +475,14 @@ export default function HistoryPage() {
         // ======= 5.4 Continue recording: go to record page
         router.push("/dashboard/record");
       } else {
-        // =======5.5 View summary: go to corresponding campaign summary
-        router.push(`/campaigns/${confirmStory.id}/summary`);
+        // =======5.5 View summary: go to corresponding campaign summary (use campaignId)
+        const cid = confirmStory.campaignId || confirmStory.id;
+        try {
+          if (typeof window !== "undefined") {
+            localStorage.setItem("currentSummaryId", confirmStory.id);
+          }
+        } catch {}
+        router.push(`/campaigns/${cid}/summary`);
       }
     }
   };
@@ -387,14 +494,20 @@ export default function HistoryPage() {
         `Are you sure you want to delete "${story.title}"? This action cannot be undone.`
       )
     ) {
-      // 1️⃣ 从本地删除
-      setStories((prev) => prev.filter((s) => s.id !== story.id));
-      // 2️⃣ 通知后端删除
+      // 1️⃣ 请求后端删除
       fetch(`/api/data?id=${story.id}`, { method: "DELETE" })
-        .then((res) => {
-          if (!res.ok) throw new Error("Failed to delete record");
+        .then(async (res) => {
+          if (!res.ok) {
+            const body = await res.text().catch(() => "");
+            throw new Error(body || `Delete failed (status ${res.status})`);
+          }
+          // 2️⃣ 从本地删除
+          setStories((prev) => prev.filter((s) => s.id !== story.id));
         })
-        .catch((err) => console.error("Delete failed:", err));
+        .catch((err) => {
+          console.error("Delete failed:", err);
+          alert(err?.message || "Failed to delete record");
+        });
     } else {
       // 用户取消
       console.log("Delete canceled");
