@@ -233,6 +233,9 @@ API 放在 src/app/api/<name>/route.ts 的文件，会变成一个服务器接�
   npx prisma generate
   npx prisma migrate dev --name addResources
 
+  npm install @prisma/client
+
+
 
 1. 新建 Prisma 客户端工具
    新建文件：src/lib/prisma.ts
@@ -289,8 +292,8 @@ res.cookies.set("currentCampaignId", id, {
 path: "/",
 httpOnly: true,
 sameSite: "lax",
-secure: process.env.NODE_ENV === "production",
-maxAge: remember ? 60 _ 60 _ 24 \* 30 : undefined,
+secure: process.env.NODE*ENV === "production",
+maxAge: remember ? 60 * 60 \_ 24 \* 30 : undefined,
 });
 
 ```
@@ -309,6 +312,7 @@ npm install tesseract.js
 npm install node-tesseract-ocr
 npm install pdf-parse mammoth
 npm install tesseract.js pdf-parse pdf2pic mammoth node-fetch
+npm i mammoth turndown
 
 还需要本机安装 tesseract-ocr 可执行程序（Windows 需要去下载 Tesseract installer
 并把路径加到环境变量里）

@@ -5,7 +5,6 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { useTranscript } from "../../context/TranscriptContext";
 import { ragIngestTranscript } from "@/lib/ragClient";
 
-
 // size
 function formatSize(n: number) {
   if (n < 1024) return `${n} B`;
@@ -22,18 +21,26 @@ function wsURL() {
   if (typeof window !== "undefined") {
     const proto = window.location.protocol === "https:" ? "wss" : "ws";
     const host = window.location.hostname;
-  return `${proto}://${host}:8000/audio`;
+    return `${proto}://${host}:8000/audio`;
   }
   return "ws://localhost:8000/audio";
 }
 
 // upload modal
-function UploadModal({ onClose, campaignTitle }: { onClose: () => void; campaignTitle: string | null }) {
+function UploadModal({
+  onClose,
+  campaignTitle,
+}: {
+  onClose: () => void;
+  campaignTitle: string | null;
+}) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [progress, setProgress] = useState(0);
   const [isFileDialogOpen, setIsFileDialogOpen] = useState(false);
-  const [submitState, setSubmitState] = useState<"idle" | "submitting" | "submitted" | "error">("idle");
+  const [submitState, setSubmitState] = useState<
+    "idle" | "submitting" | "submitted" | "error"
+  >("idle");
   const { setTranscript, setSummary } = useTranscript();
   const router = useRouter();
 
@@ -55,7 +62,10 @@ function UploadModal({ onClose, campaignTitle }: { onClose: () => void; campaign
     const mime = (f.type || "").toLowerCase();
     const allowedExt = new Set(["txt", "mp3", "m4a", "mp4", "wav", "aac"]);
     const isAllowedByExt = allowedExt.has(ext);
-    const isAllowedByMime = mime.startsWith("audio/") || mime === "video/mp4" || mime === "text/plain";
+    const isAllowedByMime =
+      mime.startsWith("audio/") ||
+      mime === "video/mp4" ||
+      mime === "text/plain";
     if (!(isAllowedByExt || isAllowedByMime)) {
       alert("Please upload txt / Mp3 / M4A / Mp4 / Wav / Aac (≤50MB).");
       return;
@@ -87,7 +97,13 @@ function UploadModal({ onClose, campaignTitle }: { onClose: () => void; campaign
   const doneBytes = file ? (Math.min(progress, 100) / 100) * file.size : 0;
 
   const handleConfirmSubmit = async () => {
-    if (!file || !isDone || submitState === "submitting" || submitState === "submitted") return;
+    if (
+      !file ||
+      !isDone ||
+      submitState === "submitting" ||
+      submitState === "submitted"
+    )
+      return;
     setSubmitState("submitting");
     try {
       const fd = new FormData();
@@ -104,7 +120,10 @@ function UploadModal({ onClose, campaignTitle }: { onClose: () => void; campaign
       }
       // ADDED BY JESS COMMENT OUT IF CAUSING ISSUES
       if (data.text?.trim()) {
-        const idPrefix = `${campaignTitle || "upload"}:${file.name.replace(/\W+/g, "_")}:${Date.now()}`;
+        const idPrefix = `${campaignTitle || "upload"}:${file.name.replace(
+          /\W+/g,
+          "_"
+        )}:${Date.now()}`;
         await ragIngestTranscript({
           idPrefix,
           text: data.text,
@@ -119,7 +138,9 @@ function UploadModal({ onClose, campaignTitle }: { onClose: () => void; campaign
       } else {
         console.warn("No transcript text returned from /api/upload");
       }
-      router.push("/dashboard/record");
+      // router.push("/dashboard/record");
+      router.push("/dashboard/record?fresh=1");
+
       setSubmitState("submitted");
     } catch (e) {
       console.error(e);
@@ -284,7 +305,6 @@ export default function DashboardPage() {
     if (sp.get("open") === "upload") setOpenUpload(true);
   }, [sp]);
 
-  
   // NEW: 读取当前 campaign
   useEffect(() => {
     (async () => {
@@ -364,7 +384,8 @@ export default function DashboardPage() {
       };
 
       (window as any).__asrSession = { ctx, source, node, ws, stream };
-      router.push("/dashboard/record");
+      // router.push("/dashboard/record");
+      router.push("/dashboard/record?fresh=1");
     } catch (err) {
       console.error(err);
       alert(
@@ -433,12 +454,15 @@ export default function DashboardPage() {
       >
         Welcome back,
         <br />
-        <span className="italic">
-          {campaignTitle ?? "your next adventure"}
-        </span>
+        <span className="italic">{campaignTitle ?? "your next adventure"}</span>
       </div>
 
-  {openUpload && <UploadModal onClose={() => setOpenUpload(false)} campaignTitle={campaignTitle} />}
+      {openUpload && (
+        <UploadModal
+          onClose={() => setOpenUpload(false)}
+          campaignTitle={campaignTitle}
+        />
+      )}
     </div>
   );
 }

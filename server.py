@@ -1,7 +1,8 @@
-import os, re, json, time, tempfile, shutil
+import os, re, json, time, tempfile, shutil, sys
 from typing import List, Optional, Dict, Any, Union
+import contextlib
 from contextlib import asynccontextmanager
-
+import asyncio
 import numpy as np
 import requests
 import chromadb
@@ -15,15 +16,27 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 
+from typing import Callable, Optional
+
+# Fix OpenMP library conflict
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+import queue
+import threading
+from typing import List, Dict
+import sounddevice as sd
+from datetime import datetime
+
 # =====================================================================
 # SETTINGS & GLOBAL CONFIG
 # =====================================================================
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS", "1")
 
 SAMPLE_RATE = 16000
-SILENCE_END_MS = 600
+SILENCE_END_MS = 800
 PARTIAL_INTERVAL = 0.9
 OVERLAP_SEC = 0.2
+
+SUMMARY_CHUNK_CHARS = int(os.getenv("SUMMARY_CHUNK_CHARS", "100"))
 
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small")
 WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "cpu")
@@ -31,7 +44,7 @@ WHISPER_COMPUTE = os.getenv("WHISPER_COMPUTE", "int8")
 LANG = os.getenv("ASR_LANG", "en")
 
 BEAM = int(os.getenv("BEAM", "1"))
-TEMP = float(os.getenv("TEMP", "0.0"))
+TEMP = 0.0
 
 DB_PATH = os.getenv("CHROMA_DB_PATH", "./chroma_db")
 COLLECTION_NAME = os.getenv("CHROMA_COLLECTION", "docs")
@@ -41,7 +54,7 @@ EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text")
 
 # LLM / summarization
 OLLAMA_SUMMARY_MODEL = os.getenv("OLLAMA_SUMMARY_MODEL", "phi3:medium")
-SUMMARY_THRESHOLD_CHARS = int(os.getenv("SUMMARY_THRESHOLD_CHARS", "30"))
+SUMMARY_THRESHOLD_CHARS = int(os.getenv("SUMMARY_THRESHOLD_CHARS", "100"))
 OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "120"))
 
 # Retrieval trimming
@@ -58,26 +71,48 @@ ANSWER_ECHO_ONLY = os.getenv("ANSWER_ECHO_ONLY", "0") == "1"
 # =====================================================================
 # SHARED CLIENTS (Whisper, VAD)
 # =====================================================================
+
+
 print("[Init] Loading Whisper model…")
 whisper = WhisperModel(WHISPER_MODEL, device=WHISPER_DEVICE, compute_type=WHISPER_COMPUTE)
 vad = webrtcvad.Vad(2)
 
 # =====================================================================
-# EMBEDDING FUNCTION (Ollama)
+# EMBEDDING FUNCTION (Ollama) — tolerant to Chroma EF API changes
 # =====================================================================
 AllowedMeta = Union[str, int, float, bool]
 
+
 class OllamaEmbeddingFunction:
+    """
+    Works with older Chroma (calls __call__) and newer Chroma
+    (calls embed_query/embed_documents with input=...).
+    """
+
     def __init__(self, base_url: str = OLLAMA_URL, model: str = EMBED_MODEL, timeout: int = 60):
-        self.base_url, self.model, self.timeout = base_url.rstrip("/"), model, timeout
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.timeout = timeout
 
     def name(self) -> str:
         return f"ollama::{self.model}"
 
-    # IMPORTANT: Chroma expects the param to be named **input**
+    # Back-compat: some Chroma versions call __call__(input=[...])
     def __call__(self, input: List[str]) -> List[List[float]]:
-        # Coerce to list if a single string was passed
         texts = [input] if isinstance(input, str) else input
+        return self._embed(texts)
+
+    # Newer Chroma interface (accepts input=..., **kwargs for future-proof)
+    def embed_documents(self, input: List[str], **kwargs) -> List[List[float]]:
+        texts = [input] if isinstance(input, str) else input
+        return self._embed(texts)
+
+    # Some Chroma builds expect a BATCH shape back ([[...]]), not a flat list.
+    def embed_query(self, input: Union[str, List[str]], **kwargs) -> List[List[float]]:
+        text = input[0] if isinstance(input, list) else input
+        return self._embed([text])
+
+    def _embed(self, texts: List[str]) -> List[List[float]]:
         out: List[List[float]] = []
         for t in texts:
             r = requests.post(
@@ -93,13 +128,56 @@ class OllamaEmbeddingFunction:
             out.append(emb)
         return out
 
+
 ef = OllamaEmbeddingFunction()
+
+
+def embed_query_batched(text: str) -> List[List[float]]:
+    """
+    Version-agnostic query embedding:
+    - Try ef.embed_query(input=...)
+    - Fallback to ef.embed_query(...)
+    - Fallback to ef([text]) (old __call__)
+    - Last resort: call Ollama HTTP directly
+    Always returns [[float]].
+    """
+    # Try various EF call styles
+    try:
+        vec = ef.embed_query(input=text)
+    except TypeError:
+        try:
+            vec = ef.embed_query(text)
+        except Exception:
+            try:
+                vec = ef([text])
+            except Exception:
+                # direct HTTP fallback
+                r = requests.post(
+                    f"{OLLAMA_URL.rstrip('/')}/api/embeddings",
+                    json={"model": EMBED_MODEL, "prompt": text},
+                    timeout=OLLAMA_TIMEOUT,
+                )
+                r.raise_for_status()
+                emb = r.json().get("embedding")
+                vec = [emb] if emb else None
+
+    if vec is None:
+        raise RuntimeError("Failed to obtain query embedding.")
+
+    # Normalize to batch shape
+    if isinstance(vec, list) and vec and isinstance(vec[0], float):
+        return [vec]  # [float] -> [[float]]
+    if isinstance(vec, list) and vec and isinstance(vec[0], list):
+        return vec  # already [[float]]
+    raise RuntimeError(f"Unexpected embedding shape from EF: {type(vec)}")
+
 
 # =====================================================================
 # CHROMA BOOTSTRAP (auto-create & self-heal)
 # =====================================================================
 chroma = None
 collection = None
+
 
 def init_chroma():
     """(Re)initialise Chroma client+collection; create path if missing."""
@@ -115,6 +193,7 @@ def init_chroma():
     )
     print(f"[Chroma] ready at {DB_PATH}, collection={COLLECTION_NAME}")
 
+
 def ensure_collection():
     """Ping collection; if missing or broken, re-init on the fly."""
     global collection
@@ -124,7 +203,9 @@ def ensure_collection():
         print(f"[Chroma] ensure failed ({type(e).__name__}): {e} — reinit")
         init_chroma()
 
+
 init_chroma()
+
 
 # =====================================================================
 # APP LIFESPAN (Warm models)
@@ -151,6 +232,7 @@ async def lifespan(app: FastAPI):
         print("[Warmup] skipped:", e)
     yield
 
+
 # =====================================================================
 # FASTAPI APP & MIDDLEWARE
 # =====================================================================
@@ -159,11 +241,12 @@ app = FastAPI(lifespan=lifespan)
 allowed_origins = os.getenv("CORS_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,   # use explicit origins in prod (comma-separated)
-    allow_credentials=False,         # keep False with "*" to avoid browser rejection
+    allow_origins=allowed_origins,  # use explicit origins in prod (comma-separated)
+    allow_credentials=False,  # keep False with "*" to avoid browser rejection
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # =====================================================================
 # UTILITIES
@@ -177,17 +260,20 @@ def focus_term(q: str) -> Optional[str]:
     caps = re.findall(r"\b[A-Z][a-zA-Z'-]{2,}\b", q)
     return max(caps, key=len).lower() if caps else None
 
+
 def first_n_sentences(t: str, n: int = 2) -> str:
     parts = re.split(r'(?<=[.!?])\s+', t.strip())
     return ' '.join(parts[:n]).strip()
+
 
 def trim_text(s: str, n: int) -> str:
     s = s or ""
     return s if len(s) <= n else s[:n] + "…"
 
+
 def chunk_text(text: str,
-               max_chars: int = int(os.getenv("CHUNK_CHARS", "1200")),
-               overlap: int   = int(os.getenv("CHUNK_OVERLAP", "150"))) -> List[str]:
+               max_chars: int = int(os.getenv("CHUNK_CHARS", "800")),
+               overlap: int = int(os.getenv("CHUNK_OVERLAP", "30"))) -> List[str]:
     sents = re.split(r'(?<=[.!?])\s+', (text or "").strip())
     chunks, cur = [], ""
     for s in sents:
@@ -202,6 +288,7 @@ def chunk_text(text: str,
         chunks.append(cur)
     return chunks
 
+
 def clean_metadata(meta: dict | None) -> Dict[str, AllowedMeta]:
     out: Dict[str, AllowedMeta] = {}
     if not meta:
@@ -212,11 +299,13 @@ def clean_metadata(meta: dict | None) -> Dict[str, AllowedMeta]:
         out[k] = v if isinstance(v, (str, int, float, bool)) else str(v)
     return out
 
+
 def is_speech_int16(pcm16: np.ndarray) -> bool:
     try:
         return vad.is_speech(pcm16.tobytes(), SAMPLE_RATE)
     except Exception:
         return False
+
 
 def transcribe_float32(wave_f32: np.ndarray) -> str:
     segs, _ = whisper.transcribe(
@@ -230,51 +319,152 @@ def transcribe_float32(wave_f32: np.ndarray) -> str:
     )
     return "".join(s.text for s in segs).strip()
 
+
 def summarize_with_ollama(text: str, model: str = OLLAMA_SUMMARY_MODEL) -> str:
+    print(f"\n[Summary] Calling Ollama with {len(text.split())} words")
+    print(f"[Summary] Input preview: {text[:150]}...\n")
+
+    prompt = (
+        "You are a note summarization assistant. "
+        "Summarize the following transcript into English. "
+        "The first line should be the title itself only (no 'Title:' prefix or any leading symbols). "
+        "From the second line, write 2–5 concise points (one per line, no markdown bullets or special symbols). "
+        f"\n\nTranscript:\n{text}"
+    )
+
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "stream": False,
+        "keep_alive": "1h",
+        "options": {"temperature": 0.2},
+    }
+
     try:
         resp = requests.post(
             f"{OLLAMA_URL.rstrip('/')}/api/generate",
             headers={"Content-Type": "application/json"},
-            json={
-                "model": model,
-                "prompt": f"Summarize the following transcript into concise bullet points:\n\n{text}",
-                "stream": False,
-                "keep_alive": "1h",
-            },
+            json=payload,
             timeout=OLLAMA_TIMEOUT,
         )
-        if resp.ok:
-            data = resp.json()
-            return (data.get("response") or "").strip()
-        return f"[Error] Ollama HTTP {resp.status_code}"
+        resp.raise_for_status()
+        data = resp.json()
+        out = (data.get("response") or "").strip()
+        print(f"[Summary] Ollama response:\n{out}\n{'-'*50}")
+        return out
     except Exception as e:
+        print(f"[Error][Ollama] {e}")
         return f"[Error] {e}"
 
-# =====================================================================
-# MODELS
-# =====================================================================
+
+
+class RollingSummarizer:
+    """
+    把连续传入的文本按固定长度切成块（默认每100字），
+    对每块调用 summarizer（如：summarize_with_ollama）产生一段“标题+要点”。
+    push() 可能一次返回 0~多段；flush() 返回剩余不足一块的尾段（如有）。
+    """
+
+    def __init__(
+            self,
+            threshold_chars: int = SUMMARY_CHUNK_CHARS,
+            fn: Optional[Callable[[str], str]] = None,
+            cooldown_sec: float = 0.0,
+    ):
+        self.threshold = max(1, int(threshold_chars))
+        self.fn = fn or (lambda s: s)
+        self.cooldown_sec = cooldown_sec
+        self._buf: list[str] = []
+        self._last_t = 0.0
+
+    def _split_on_sentence(self, s: str, hard_len: int) -> int:
+        """
+        为了读起来更像句子，优先在块末 40 字内找句号/问号/叹号切分；
+        找不到就用硬阈值 hard_len。返回切分位置（包含该标点）。
+        """
+        if len(s) < hard_len:
+            return 0
+        chunk = s[:hard_len]
+        tail = chunk[-40:]
+        for p in ("。", "！", "？", ".", "!", "?"):
+            i = tail.rfind(p)
+            if i != -1:
+                return (hard_len - len(tail)) + i + 1
+        return hard_len
+
+    def push(self, text: str) -> list[str]:
+        self._buf.append(text or "")
+        s = "".join(self._buf)
+        out: list[str] = []
+
+        # 轻微防抖（与原逻辑一致）
+        import time as _t
+        if self.cooldown_sec and (_t.time() - self._last_t) < self.cooldown_sec and len(s) < self.threshold:
+            return out
+
+        print(f"[Rolling] Current buffer len={len(s)}, threshold={self.threshold}")
+        while len(s) >= self.threshold:
+            cut = self._split_on_sentence(s, self.threshold)
+            chunk, s = s[:cut], s[cut:]
+            try:
+                seg = (self.fn(chunk) or "").strip()
+                print(f"[Rolling] Segment generated, len={len(chunk)} chars")
+
+                if seg:
+                    out.append(seg)
+            except Exception as e:
+                out.append(f"[Error summarizing chunk] {e}")
+        print(f"[Rolling] Current buffer len={len(s)}, threshold={self.threshold}")
+
+        self._buf = [s]
+        self._last_t = _t.time()
+        return out
+
+    def flush(self) -> str:
+        """把剩余不足一块的尾巴也总结一次"""
+        s = "".join(self._buf).strip()
+        self._buf = []
+        if not s:
+            return ""
+        try:
+            return (self.fn(s) or "").strip()
+        except Exception as e:
+            return f"[Error summarizing tail] {e}"
+
+# --- New: word-chunk summarizer (dnd_summarizer 风格) ---
+import re
+import time
+from collections import deque
+
+
+
 class IngestTranscriptRequest(BaseModel):
     id_prefix: str
     text: str
     metadata: Optional[Dict[str, Any]] = None
+
 
 class IngestItem(BaseModel):
     id: str
     text: str
     metadata: Optional[Dict[str, Any]] = None
 
+
 class IngestRequest(BaseModel):
     items: List[IngestItem]
+
 
 class QueryRequest(BaseModel):
     query: str
     top_k: int = 5
     where: Optional[Dict[str, Any]] = None
 
+
 class AnswerRequest(BaseModel):
     question: str
     top_k: int = 5
     where: Optional[Dict[str, Any]] = None
+
 
 # =====================================================================
 # HEALTH
@@ -288,6 +478,7 @@ def health():
         "db": {"path": DB_PATH, "collection": COLLECTION_NAME, "count": collection.count()},
     }
 
+
 # =====================================================================
 # ADMIN (reset/clear)
 # =====================================================================
@@ -300,6 +491,7 @@ def admin_clear_collection():
     except Exception as e:
         raise HTTPException(500, f"clear failed: {e}")
 
+
 @app.post("/admin/reset_disk")
 def admin_reset_disk():
     try:
@@ -309,6 +501,7 @@ def admin_reset_disk():
         return {"ok": True, "recreated": True, "path": DB_PATH}
     except Exception as e:
         raise HTTPException(500, f"reset_disk failed: {e}")
+
 
 # =====================================================================
 # RAG: TRANSCRIPT INGEST (server-side chunking)
@@ -323,12 +516,13 @@ def ingest_transcript(req: IngestTranscriptRequest):
     base_meta = clean_metadata(req.metadata)
     base_meta["type"] = "raw"
 
-    ids   = [f"{req.id_prefix}_{i:04d}" for i in range(len(chunks))]
-    docs  = chunks
+    ids = [f"{req.id_prefix}_{i:04d}" for i in range(len(chunks))]
+    docs = chunks
     metas = [{**base_meta, "chunk_index": i} for i in range(len(chunks))]
 
     collection.add(ids=ids, documents=docs, metadatas=metas)
     return {"ok": True, "count": len(ids)}
+
 
 # =====================================================================
 # RAG: GENERIC INGEST & QUERY
@@ -344,11 +538,18 @@ def ingest(req: IngestRequest):
     collection.add(ids=ids, documents=docs, metadatas=metas)
     return {"ok": True, "count": len(ids)}
 
+
 @app.post("/query")
 def query(req: QueryRequest):
     ensure_collection()
+    # Version-agnostic embedding at query time
+    try:
+        qbatch = embed_query_batched(req.query)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Query embedding failed: {e}")
+
     res = collection.query(
-        query_texts=[req.query],
+        query_embeddings=qbatch,
         n_results=req.top_k,
         where=req.where,
         include=["documents", "metadatas", "distances"],
@@ -368,6 +569,7 @@ def query(req: QueryRequest):
         })
     return {"results": items}
 
+
 # =====================================================================
 # RAG: ANSWER (uses retrieved context)
 # =====================================================================
@@ -376,15 +578,21 @@ def answer(req: AnswerRequest):
     ensure_collection()
     effective_where = req.where if (req.where and len(req.where)) else {"type": "raw"}
 
+    # Version-agnostic embedding at query time
+    try:
+        qbatch = embed_query_batched(req.question)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Query embedding failed: {e}")
+
     res = collection.query(
-        query_texts=[req.question],
+        query_embeddings=qbatch,
         n_results=req.top_k,
         where=effective_where,
         include=["documents", "metadatas", "distances"],
     )
 
-    ids   = res.get("ids", [[]])[0]
-    docs  = res.get("documents", [[]])[0]
+    ids = res.get("ids", [[]])[0]
+    docs = res.get("documents", [[]])[0]
     metas = res.get("metadatas", [[]])[0]
     dists = res.get("distances", [[]])[0]
 
@@ -399,6 +607,7 @@ def answer(req: AnswerRequest):
     if term:
         def score(d: str) -> int:
             return (d or "").lower().count(term)
+
         scored = [(i, d, m, score(d)) for i, d, m in zip(ids, docs, metas)]
         filtered = [t for t in scored if t[3] > 0]
         chosen = filtered if filtered else scored
@@ -466,37 +675,82 @@ def answer(req: AnswerRequest):
     used = [{"id": id_, "text": d, "metadata": m} for id_, d, m in zip(ids, docs, metas)]
     return {"answer": answer_text, "used": used}
 
+
+# =====================================================================
+# RECORDING / STT: WS STREAMING + FILE UPLOAD
+# =====================================================================
+
+def strip_md(s: str) -> str:
+    # 去掉每行开头的 Markdown 标题符号 ### / ## / #
+    s = re.sub(r'(?m)^\s*#{1,6}\s*', '', s)
+    # 去掉成对粗体/斜体符号 **text**、__text__、*text*、_text_
+    s = re.sub(r'(\*\*|__)(.*?)\1', r'\2', s)
+    s = re.sub(r'(\*|_)(.*?)\1', r'\2', s)
+    # 去掉列表前缀 - / * / 数字.
+    s = re.sub(r'(?m)^\s*[-*]\s+', '', s)
+    s = re.sub(r'(?m)^\s*\d+\.\s+', '', s)
+    return s
+
+
+async def _ws_sender(ws, q: asyncio.Queue):
+    """从队列中取消息并发送到 WebSocket；保证发送与接收解耦。"""
+    try:
+        while True:
+            msg = await q.get()
+            try:
+                await ws.send_text(msg)
+                # 更明确的“真正发出”日志
+                print(f"[WS] actually sent -> {msg[:120]}...")
+            except Exception as e:
+                print(f"[WS][send_error] {e}")
+    except asyncio.CancelledError:
+        # 任务被取消时正常退出
+        pass
+
+
 # =====================================================================
 # RECORDING / STT: WS STREAMING + FILE UPLOAD
 # =====================================================================
 async def handle_audio_ws(websocket: WebSocket):
     print("[WS] connected")
-    try:
-        await websocket.send_text(json.dumps({"partial": "[listening…]"}))
-    except Exception:
-        pass
+
+    # 发送队列 & 专用发送协程
+    send_queue: asyncio.Queue = asyncio.Queue()
+    sender_task = asyncio.create_task(_ws_sender(websocket, send_queue))
 
     speaking = False
-    last_voice = 0.0
+    last_voice = time.time()
     last_partial_t = 0.0
     last_partial_text = ""
     tail = np.zeros(int(OVERLAP_SEC * SAMPLE_RATE), dtype=np.int16)
     buf: List[np.ndarray] = []
     now = lambda: time.time()
-    cache_text = ""
+
+    LISTENING_HINT_DELAY = 0.8
+    listening_sent = False
+
+    # 建议把 SUMMARY_CHUNK_CHARS 设成 120~180；太小会产出很多条
+    rolling = RollingSummarizer(
+        threshold_chars=SUMMARY_CHUNK_CHARS,
+        fn=summarize_with_ollama,
+        cooldown_sec=0.5,
+    )
 
     try:
         while True:
             message = await websocket.receive_bytes()
-
             pcm16 = np.frombuffer(message, dtype=np.int16)
+
             if is_speech_int16(pcm16):
                 if not speaking:
                     speaking = True
+                    listening_sent = False
                     print("[State] speaking started")
+
                 last_voice = now()
                 buf.append(pcm16)
 
+                # 定时发送 partial（入队发送，避免阻塞）
                 if now() - last_partial_t >= PARTIAL_INTERVAL:
                     chunk = np.concatenate([tail, *buf]) if buf else tail
                     wave = chunk.astype(np.float32) / 32768.0
@@ -504,12 +758,21 @@ async def handle_audio_ws(websocket: WebSocket):
                         text = transcribe_float32(wave)
                         if text and text != last_partial_text:
                             print(f"[partial] {text}")
-                            await websocket.send_text(json.dumps({"partial": text}))
+                            await send_queue.put(json.dumps({"partial": text}))
                             last_partial_text = text
                     except Exception as e:
                         print(f"[WS] partial failed:", e)
                     last_partial_t = now()
+
             else:
+                if (not speaking) and (now() - last_voice >= LISTENING_HINT_DELAY) and (not listening_sent):
+                    try:
+                        await send_queue.put(json.dumps({"partial": "[listening…]"}))
+                    except Exception:
+                        pass
+                    listening_sent = True
+
+                # 句子结束：出 final + summary（全部入队）
                 if speaking and (now() - last_voice) * 1000 >= SILENCE_END_MS:
                     speaking = False
                     utter = np.concatenate([tail, *buf]) if buf else tail
@@ -518,20 +781,57 @@ async def handle_audio_ws(websocket: WebSocket):
                         final_text = transcribe_float32(wave)
                         if final_text:
                             print(f"[final] {final_text}")
-                            await websocket.send_text(json.dumps({"final": final_text}))
+                            print(f"[final] {len(final_text.split())} words recognized.")
+                            await send_queue.put(json.dumps({"final": final_text}))
 
-                            cache_text += (" " if cache_text else "") + final_text
-                            print(f"[cache] len={len(cache_text)}")
-                            if len(cache_text) >= SUMMARY_THRESHOLD_CHARS:
-                                print("[summary] calling Ollama …")
-                                summary = summarize_with_ollama(cache_text)
-                                print(f"[summary]\n{summary}\n")
-                                await websocket.send_text(json.dumps({"summary": summary}))
-                                cache_text = ""
+                            segments = rolling.push(final_text)
+
+                            # 兼容字符串或列表
+                            if isinstance(segments, str):
+                                segments = [segments] if segments else []
+                            elif not isinstance(segments, list):
+                                segments = []
+
+                            for seg in segments:
+                                seg = (seg or "").strip()
+                                if not seg:
+                                    continue
+
+                                # 按行拆分并去掉空行
+                                lines = [ln.strip() for ln in seg.splitlines() if ln.strip()]
+
+                                title = "Summary"
+                                text_lines = []
+
+                                if lines:
+                                    # 1) 如果首行是 "Title: xxx"（大小写均可），提取为标题
+                                    m = re.match(r'^Title\s*:\s*(.+)$', lines[0], flags=re.IGNORECASE)
+                                    if m:
+                                        title = m.group(1).strip()
+                                        text_lines = lines[1:]
+                                    else:
+                                        # 2) 否则用首行(去掉编号/符号前缀)做标题，其余作为正文
+                                        first = re.sub(r'^(?:[-*•]\s*|\d+[.)]\s*)', '', lines[0]).strip()
+                                        if first:
+                                            title = first
+                                        text_lines = lines[1:]
+
+                                # 清理正文中每行前缀的序号/项目符号
+                                cleaned = [re.sub(r'^(?:[-*•]\s*|\d+[.)]\s*)', '', ln).strip() for ln in text_lines]
+                                text = "\n".join([ln for ln in cleaned if ln]) or title  # 保底：没正文就用标题
+
+                                payload = {"summary_item": {"title": title, "text": text}}
+                                msg = json.dumps(payload, ensure_ascii=False)
+                                await send_queue.put(msg)
+
+                                print(f"[WS] queued summary_item -> title='{title}' text='{text[:80]}...'")
+
+
+
                     except Exception as e:
                         print(f"[WS] final failed:", e)
 
-                    # roll tail
+                    # 更新 tail / 缓存
                     if utter.size >= tail.size:
                         tail = utter[-tail.size:].copy()
                     else:
@@ -540,22 +840,50 @@ async def handle_audio_ws(websocket: WebSocket):
                     buf.clear()
                     last_partial_text = ""
                     last_partial_t = now()
+
+            # 让出事件循环，避免读循环长时间占用，保证 sender 有机会发送
+            await asyncio.sleep(0)
+
     except WebSocketDisconnect:
         print("[WS] disconnected")
-        return
-    except Exception as e:
-        print("[WS] error:", e)
+        try:
+            leftover = rolling.flush()
+            if leftover:
+                seg = leftover.strip()
+                if seg:
+                    lines = [ln.strip() for ln in seg.splitlines() if ln.strip()]
+                    bullet = ""
+                    if lines:
+                        bullet = re.sub(r'^(?:[-*•]\s*|\d+[.)]\s*)', '', lines[0]).strip()
+                    msg = json.dumps({"summary_item": {"title": "Update", "text": bullet or "Update"}})
+                    await send_queue.put(msg)
+                    print(f"[WS] queued (flush) -> '{(bullet or 'Update')[:80]}'")
+        finally:
+            sender_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await sender_task
         return
 
-@app.websocket("/ws/audio")
-async def ws_audio(websocket: WebSocket):
-    await websocket.accept()
-    await handle_audio_ws(websocket)
+    except Exception as e:
+        print("[WS] error:", e)
+        sender_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await sender_task
+        return
+
+
+#
+# @app.websocket("/ws/audio")
+# async def ws_audio(websocket: WebSocket):
+#     await websocket.accept()
+#     await handle_audio_ws(websocket)
+
 
 @app.websocket("/audio")  # legacy alias
 async def ws_audio_legacy(websocket: WebSocket):
     await websocket.accept()
     await handle_audio_ws(websocket)
+
 
 @app.post("/transcribe")
 async def transcribe(file: UploadFile = File(...)):
@@ -579,8 +907,11 @@ async def transcribe(file: UploadFile = File(...)):
         raise HTTPException(500, str(e))
     finally:
         if tmp_path:
-            try: os.remove(tmp_path)
-            except Exception: pass
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+
 
 # =====================================================================
 # ENTRYPOINT
@@ -588,4 +919,6 @@ async def transcribe(file: UploadFile = File(...)):
 if __name__ == "__main__":
     # Ensure DB path exists at boot
     os.makedirs(DB_PATH, exist_ok=True)
-    uvicorn.run("server:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")), reload=False)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")), reload=False)
+
+
