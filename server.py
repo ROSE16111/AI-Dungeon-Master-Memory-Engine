@@ -19,7 +19,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket, WebSock
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
-from starlette.websockets import WebSocketState  # SAFE SENDER GUARD
+from starlette.websockets import WebSocketState 
 
 # =====================================================================
 # SETTINGS
@@ -57,7 +57,6 @@ STOP_SENTINEL = os.getenv("STOP_SENTINEL", "<END>")
 MAX_PREDICT = int(os.getenv("MAX_PREDICT", "96"))
 ANSWER_ECHO_ONLY = os.getenv("ANSWER_ECHO_ONLY", "0") == "1"
 
-# drain/idle config
 SUMMARY_MIN_FLUSH_CHARS = int(os.getenv("SUMMARY_MIN_FLUSH_CHARS", "80"))
 SUMMARY_FORCE_FLUSH_AFTER_FINAL = os.getenv("SUMMARY_FORCE_FLUSH_AFTER_FINAL", "1") == "1"
 SUMMARY_DRAIN_TIMEOUT = float(os.getenv("SUMMARY_DRAIN_TIMEOUT", "5.0"))
@@ -65,7 +64,6 @@ SESSION_IDLE_SEC = float(os.getenv("SESSION_IDLE_SEC", "8.0"))
 last_upsert_t = 0.0
 UPSERT_COOLDOWN = float(os.getenv("UPSERT_COOLDOWN", "10.0"))
 
-# NEW: limit text size sent to the upsert API
 MAX_UPSERT_CHARS = int(os.getenv("MAX_UPSERT_CHARS", "800"))
 CHAR_UPSERT_CONNECT_TIMEOUT = float(os.getenv("CHAR_UPSERT_CONNECT_TIMEOUT", "2"))
 CHAR_UPSERT_READ_TIMEOUT = float(os.getenv("CHAR_UPSERT_READ_TIMEOUT", "180"))
@@ -175,13 +173,13 @@ async def lifespan(app: FastAPI):
             f"{OLLAMA_URL.rstrip('/')}/api/generate",
             headers={"Content-Type": "application/json"},
             json={"model": OLLAMA_SUMMARY_MODEL, "prompt": "ok", "stream": False, "keep_alive": "1h"},
-            timeout=10,
+            timeout=50,
         )
         requests.post(
             f"{OLLAMA_URL.rstrip('/')}/api/embeddings",
             headers={"Content-Type": "application/json"},
             json={"model": EMBED_MODEL, "prompt": "warmup"},
-            timeout=10,
+            timeout=50,
         )
         print("[Warmup] Ollama models loaded")
     except Exception as e:
@@ -575,8 +573,17 @@ async def _background_summary_task(send_queue: asyncio.Queue, seg: str):
     try:
         raw = await summarize_async(seg)
         out = (raw or "").strip()
-        if not out or out.upper() == "SKIP":
+
+        # Skip handling
+        first_line = ""
+        for ln in out.splitlines():
+            s = ln.strip()
+            if s:
+                first_line = s
+                break
+        if not out or first_line.upper().startswith("SKIP"):
             return
+
         lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
         title = "Summary"; text_lines = []
         if lines:
@@ -626,7 +633,6 @@ async def handle_audio_ws(websocket: WebSocket):
     CHAR_UPSERT_URL = os.getenv("CHAR_UPSERT_URL", "http://127.0.0.1:3000/api/characters/upsert")
     campaign_id: Optional[str] = None
 
-    # ---- capture campaignId from URL or header right away ----
     try:
         qp = dict(websocket.query_params)
         if qp.get("campaignId"):
@@ -643,7 +649,6 @@ async def handle_audio_ws(websocket: WebSocket):
                 print(f"[WS] campaign_id set via header -> {campaign_id}")
     except Exception:
         pass
-    # ---------------------------------------------------------------
 
     async def _post_characters_chunk_local(campaign_id_: Optional[str], text: str):
         if not campaign_id_ or not text or not CHAR_UPSERT_URL:
@@ -653,7 +658,7 @@ async def handle_audio_ws(websocket: WebSocket):
 
         def _do_post():
             try:
-                body_text = text[:MAX_UPSERT_CHARS]  # trim very long payloads
+                body_text = text[:MAX_UPSERT_CHARS] 
                 resp = requests.post(
                     CHAR_UPSERT_URL,
                     headers={"Content-Type": "application/json", "Connection": "close"},
@@ -674,7 +679,7 @@ async def handle_audio_ws(websocket: WebSocket):
         await asyncio.to_thread(_do_post)
 
     async def _flush_and_finish(reason: str):
-        global last_upsert_t  # BUGFIX: we modify the module-level throttle
+        global last_upsert_t 
         leftover = rolling.flush().strip()
         if leftover:
             task = asyncio.create_task(_background_summary_task(send_queue, leftover))
@@ -687,7 +692,6 @@ async def handle_audio_ws(websocket: WebSocket):
                     last_upsert_t = now_s
                     print(f"[CharUpsert] posting {len(leftover)} chars for campaign={campaign_id}")
                     asyncio.create_task(_post_characters_chunk_local(campaign_id, leftover))
-                # else: skip (too soon / tiny)
             else:
                 print("[CharUpsert] flush skipped: campaign_id not set")
 
@@ -714,12 +718,10 @@ async def handle_audio_ws(websocket: WebSocket):
                     await websocket.close()
                 break
 
-            # ---- TEXT FRAMES (control) ----
             if "text" in msg and msg["text"] is not None:
                 text_frame = (msg["text"] or "").strip()
                 if text_frame:
                     print(f"[WS] text frame: {text_frame[:160]}")
-                # parse JSON control
                 try:
                     obj = json.loads(text_frame)
                     if isinstance(obj, dict):
@@ -735,17 +737,15 @@ async def handle_audio_ws(websocket: WebSocket):
                                     pass
                             continue
                 except Exception:
-                    pass  # not JSON
+                    pass
 
-                # explicit end (Stop button)
                 if text_frame == "__END__":
                     await _flush_and_finish("__END__")
                     closing = True
                     break
 
-                continue  # ignore other text frames
+                continue 
 
-            # ---- BINARY FRAMES (audio) ----
             if "bytes" not in msg or msg["bytes"] is None:
                 continue
             message = msg["bytes"]
@@ -831,7 +831,7 @@ async def handle_audio_ws(websocket: WebSocket):
                                     except Exception:
                                         pass
 
-                            # per-final character upsert (best-effort)
+                            # per-final character upsert
                             if campaign_id:
                                 asyncio.create_task(_post_characters_chunk_local(campaign_id, final_text))
                             else:
