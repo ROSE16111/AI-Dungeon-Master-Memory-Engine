@@ -218,12 +218,19 @@ function ResourceCard({
       </CardContent>
 
       <CardFooter className="px-4 pb-2 pt-0 justify-end gap-2">
-        {/* ✅ Open 改成弹出浮层 */}
-        <Button variant="outline" size="sm" onClick={() => onOpen(it)}>
-          Open
-        </Button>
+        {it.category === "Map" ? (
+          // ✅ Map：进入新的网格+光照视图页面
+          <Button asChild size="sm">
+            <Link href={`/resources/mapview/${it.id}`}>Open</Link>
+          </Button>
+        ) : (
+          // ✅ 其他类型：沿用你现有的 onOpen(it)
+          <Button variant="outline" size="sm" onClick={() => onOpen(it)}>
+            Open
+          </Button>
+        )}
 
-        {/* download 保持原逻辑 */}
+        {/* download 保持不变 */}
         <Button asChild variant="outline" size="sm">
           <Link
             href={detailsHref}
@@ -234,6 +241,7 @@ function ResourceCard({
           </Link>
         </Button>
       </CardFooter>
+
     </Card>
   );
 }

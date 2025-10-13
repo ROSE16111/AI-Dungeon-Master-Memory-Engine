@@ -12,7 +12,50 @@
 - icon lib: lucide-react
 - ollama: https://ollama.com
 - analyse: `npm i mammoth pdf-parse`
+## final route
+```
+src/app/
+├─ page.tsx                         // log in（/），登录后跳 /dashboard
 
+├─ (all)/                           // AppShell 分组
+│  ├─ layout.tsx                    // general shell
+
+│  ├─ dashboard/
+│  │  └─ page.tsx                   // /dashboard
+|  |  └─ record/                     
+│  |     └─ page.tsx                // /record
+
+│  ├─ resources/
+│  │  ├─ page.tsx                   // /resources  （页内 Tabs: Maps | Background）
+         └─ mapview/
+            └─ [id]/
+               └─ page.tsx 
+               
+│  ├─ history/
+│  │  ├─ page.tsx                   // /history （页内 Tabs: All | Completed）
+│  │  ├─ all/                       // （可选）子路由版
+│  │  │  └─ page.tsx                // /history/all
+│  │  └─ completed/
+│  │     └─ page.tsx                // /history/completed
+
+│  ├─ campaigns/
+│  │  └─ [id]/
+│  │     ├─ summary/
+│  │     │  └─ page.tsx             // /campaigns/123/summary（汇总页）
+│  │     ├─ session/
+│  │     │  └─ page.tsx             // /campaigns/123/session
+│  │     └─ character/
+│  │        └─ page.tsx             // /campaigns/123/character
+|  |
+
+
+├─ api/
+    ├─ analyze
+    ├─ upload
+
+└─ components/
+        ├─ layout       ← 外壳
+```
 ## cmd
 
 `pwd` check current
