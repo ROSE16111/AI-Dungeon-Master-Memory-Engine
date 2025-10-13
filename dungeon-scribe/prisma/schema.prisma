@@ -61,13 +61,19 @@ enum ResourceCategory {
 model Resource {
   id         String            @id @default(uuid())
   title      String
-  category   ResourceCategory  // ← 改成枚举
+  category   ResourceCategory  // ← enum
   fileUrl    String
   previewUrl String?
   createdAt  DateTime          @default(now())
   updatedAt  DateTime          @updatedAt
   campaignId String
   campaign   Campaign          @relation(fields: [campaignId], references: [id])
+
+  gridCols  Int?   // mapview地图横向网格数（X）
+  gridRows  Int?   // mapview地图纵向网格数（Y）
+  lightI     Int?             // 新增：当前光源 Y（行 i）
+  lightJ     Int?             // 新增：当前光源 X（列 j）
+  lightRadius Int?            // 新增：当前光源半径（单位：格）
 }
 
 

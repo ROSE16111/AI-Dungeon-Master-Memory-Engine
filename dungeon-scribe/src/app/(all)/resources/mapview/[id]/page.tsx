@@ -3,38 +3,52 @@
 // 关键词(Keywords): Dynamic Route(动态路由), params.id, Fog of War(雾层), Light Source(光源)
 
 import MaskedMap from "@/components/MaskedMap";
+import { headers } from "next/headers";
 
-// TODO：把这里替换成你的真实后端 fetch
+export const dynamic = "force-dynamic";
+
 async function getMapMeta(id: string) {
-  // 你可以改成：
-  // const res = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL}/api/maps/${id}`, { cache: "no-store" });
-  // if (!res.ok) throw new Error("Map not found");
-  // return await res.json();
+    const h = await headers(); // headers() 拿主机名。Next15 要 await
+    const host = h.get("host") || "localhost:3000";
+  const proto = process.env.VERCEL ? "https" : "http";
+  const base = `${proto}://${host}`;
 
-  // 先用演示数据验证页面结构
+   // ✅ 关键：把当前请求的 cookie 透传给内部 API
+  const cookie = h.get("cookie") ?? "";
+
+  const res = await fetch(`${base}/api/resources/${encodeURIComponent(id)}`, 
+    { cache: "no-store", headers: {
+        cookie,                                           // ← 传 cookie
+        // 如果你的接口还校验其他头，也在这里一并传过去：
+        // "user-agent": h.get("user-agent") ?? "",
+        // "accept-language": h.get("accept-language") ?? "",
+      },
+    });
+  if (!res.ok) throw new Error(`Map not found: ${res.status}`);
+  const data = await res.json();
+  const item = data?.item ?? data;
+
   return {
-    id,
-    name: `Map #${id}`,
-    imageUrl: "/paper.png", // 暂时用 public/paper.png 测试
-    cols: 40,
-    rows: 30,
+    id: item.id,
+    name: item.title ?? `Map #${id}`,
+    imageUrl: item.fileUrl || item.previewUrl || "/paper.png",
+    cols: item.gridCols ?? 40, // 没有字段时走默认
+    rows: item.gridRows ?? 30,
+    lightI: item.lightI ?? null,
+    lightJ: item.lightJ ?? null,
+    lightRadius: item.lightRadius ?? null,
   };
 }
 
-export default async function MapViewPage({
-  params: { id },
-}: {
-  params: { id: string };
-}) {
-  // 这里拿到动态路由的值（id），据此请求后端
+export default async function MapViewPage({ params: { id } }: { params: { id: string } }) {
   const meta = await getMapMeta(id);
 
   return (
     <main className="p-4 space-y-3">
       <div className="text-2xl font-semibold text-white">{meta.name}</div>
-
       <div className="rounded-xl shadow border overflow-auto bg-black/30 p-2">
         <MaskedMap
+          resourceId={id} 
           imageUrl={meta.imageUrl}
           cols={meta.cols}
           rows={meta.rows}
@@ -42,11 +56,8 @@ export default async function MapViewPage({
           fogOpacity={0.92}
         />
       </div>
-
-      <p className="text-sm text-white/80">
-        Tip: Use Arrow Keys / WASD to move light by one tile
-        （使用方向键或 WASD 按“格”移动光源）。
-      </p>
+      <p className="text-sm text-white/80">Use Arrow Keys / 'WASD'（按格移动光源）</p>
+      <p className="text-sm text-white/80">Use 'h' to close/open Inspector</p>
     </main>
   );
 }

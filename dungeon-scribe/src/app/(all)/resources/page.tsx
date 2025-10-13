@@ -229,9 +229,6 @@ function ResourceCard({
       </CardContent>
 
       <CardFooter className="px-4 pb-2 pt-0 justify-end gap-2">
-        <Button variant="outline" size="sm" onClick={() => onOpen(it)}>
-          Open
-        </Button>
         {it.category === "Map" ? (
           // ✅ Map：进入新的网格+光照视图页面
           <Button asChild size="sm">
