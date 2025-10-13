@@ -120,7 +120,7 @@ async function summarizeChunk(
         Output format:
         - Write 2–4 sections for THIS CHUNK.
         - Each section MUST be:
-          Line 1: SHORT TITLE
+          Line 1: SHORT TITLE (do not use the word title)
           Line 2..3: 1–3 factual sentences
         - Blank line between sections. No bullets, no numbering, no "###".
         - Focus on the following (if stated): plot beats, explicit NPC names/roles, locations actually visited, items gained/lost, important player decisions and their consequences, hooks/next steps that were said.
@@ -173,7 +173,7 @@ async function mergeSummaries(summaries: string[]): Promise<string> {
         OUTPUT:
         - Write 4–10 sections total.
         - Each section MUST be:
-          Line 1: SHORT TITLE (no hashes, bullets, or numbers)
+          Line 1: SHORT TITLE (no hashes, bullets, or numbers, do not use the word title)
           Line 2..3: 1–3 factual sentences
         - One blank line between sections.
         - Focus on the following (if stated): plot beats, explicit NPC names/roles, locations actually visited, items gained/lost, important player decisions and their consequences, hooks/next steps that were said.
@@ -213,7 +213,7 @@ export async function summarizeDnDSession(rawText: string): Promise<string> {
         OUTPUT:
         - Write 4–8 sections.
         - Each section MUST be:
-          Line 1: A SHORT TITLE on its own line (no hashes, no numbers, no bullets).
+          Line 1: A SHORT TITLE on its own line (no hashes, no numbers, no bullets, do not use the word title).
           Line 2..3: 1–3 sentences of concise prose describing only facts from the text.
         - Put ONE blank line between sections.
         - Do NOT use lists or bullets. Do NOT add "###" or any other heading markup.
