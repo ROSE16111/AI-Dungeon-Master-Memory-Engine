@@ -172,18 +172,29 @@ type CardItem = {
 /* --------------------------------- small pieces -------------------------------- */
 function ResourceCard({
   it,
-  onOpen, // ✅ 新增参数
+  onOpen,
+  onDelete, // ✅ 新增
 }: {
   it: CardItem;
   onOpen: (item: CardItem) => void;
+  onDelete: (item: CardItem) => void;
 }) {
   const detailsHref = it.fileUrl ?? `/resources/${it.id}`;
   const target = it.fileUrl ? "_blank" : undefined;
 
   return (
-    <Card className="overflow-hidden rounded-2xl bg-white/90 backdrop-blur">
+    <Card className="overflow-hidden rounded-2xl bg-white/90 backdrop-blur relative">
+      {/* ✅ 垃圾桶按钮右上角 */}
+      <button
+        onClick={() => onDelete(it)}
+        className="absolute top-2 right-2 z-30 p-2 bg-white/85 rounded-full hover:bg-red-100 active:scale-95 transition shadow"
+        aria-label="Delete resource"
+        title="Delete this resource"
+      >
+        🗑️
+      </button>
+
       <CardHeader className="p-0">
-        {/* 注意：Tailwind 默认没有 h-33，这里用 h-36，否则会塌陷/报未知类名 */}
         <div className="relative h-36 w-full">
           <Image
             src={it.img}
@@ -218,6 +229,9 @@ function ResourceCard({
       </CardContent>
 
       <CardFooter className="px-4 pb-2 pt-0 justify-end gap-2">
+        <Button variant="outline" size="sm" onClick={() => onOpen(it)}>
+          Open
+        </Button>
         {it.category === "Map" ? (
           // ✅ Map：进入新的网格+光照视图页面
           <Button asChild size="sm">
@@ -475,6 +489,24 @@ export default function ResourcesPage() {
     }
   }
 
+  // ✅ 删除函数（弹出确认提示）
+  function handleDelete(item: CardItem) {
+    if (
+      window.confirm(
+        `Are you sure you want to delete "${item.title}"? This action cannot be undone.`
+      )
+    ) {
+      // 1️⃣ 前端立即移除
+      setItems((prev) => prev.filter((x) => x.id !== item.id));
+      // 2️⃣ 通知后端删除
+      fetch(`/api/resources?id=${item.id}`, { method: "DELETE" })
+        .then((res) => {
+          if (!res.ok) throw new Error("Failed to delete resource");
+        })
+        .catch((err) => console.error("Delete failed:", err));
+    }
+  }
+
   return (
     <main className="min-h-screen w-full px-4 pb-16 pt-2 md:px-8">
       <TitleWithFilter
@@ -523,6 +555,7 @@ export default function ResourcesPage() {
                         key={`${it.id}-${i}`}
                         it={it}
                         onOpen={handleOpen}
+                        onDelete={handleDelete} // ✅ 新增
                       />
                     )
                   )}

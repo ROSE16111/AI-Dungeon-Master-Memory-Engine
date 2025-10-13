@@ -189,6 +189,45 @@ export default function SummaryPage() {
   useLockBodyScroll();
   const [view, setView] = useState<"sessions" | "character">("sessions");
   const router = useRouter();
+  const params = useParams();
+  const [campaignId, setCampaignId] = useState<string | undefined>(undefined);
+
+  // Resolve campaignId from route params, localStorage, or server cookie
+  useEffect(() => {
+    let id: string | undefined;
+    const p = params?.id;
+    if (Array.isArray(p)) id = p[0];
+    else if (typeof p === "string") id = p;
+
+    if (!id || id === "${campaignId}" || id === "%24%7BcampaignId%7D") {
+      if (typeof window !== "undefined") {
+        const stored = localStorage.getItem("currentCampaignId");
+        if (stored) id = stored;
+      }
+    }
+
+    // If still no id, fetch from server cookie endpoint
+    if (!id) {
+      (async () => {
+        try {
+          const res = await fetch("/api/current-campaign");
+          if (res.ok) {
+            const json = await res.json();
+            if (json?.id) {
+              setCampaignId(json.id);
+              return;
+            }
+          }
+        } catch (e) {
+          // ignore
+        }
+        setCampaignId(undefined);
+      })();
+      return;
+    }
+
+    setCampaignId(id as string | undefined);
+  }, [params]);
 
   // 搜索：仅在 character 视图里生效
   const [q, setQ] = useState("");
@@ -241,7 +280,7 @@ export default function SummaryPage() {
             <ParchmentBackground />
 
             {/* Sessions 维持原样，不接入搜索 */}
-            {view === "sessions" && <CardOnPaper />}
+            {view === "sessions" && <CardOnPaper campaignId={campaignId} />}
 
             {/* Characters：接入 searchName 实现“居中+动画” */}
             {view === "character" && (
@@ -256,7 +295,7 @@ export default function SummaryPage() {
                   pointerEvents: "auto",
                 }}
               >
-                <CharacterCarouselStacked searchName={charSearchKey} />
+                <CharacterCarouselStacked searchName={charSearchKey} campaignIdProp={campaignId} />
               </div>
             )}
           </section>
@@ -293,14 +332,14 @@ function ParchmentBackground() {
 
 /**======= Component4: Sessions 里的白卡片（右上角加下载按钮） */
 /**======= Component4: Sessions 里的白卡片（下载 .txt：标题+日期+Summary） */
-function CardOnPaper() {
+function CardOnPaper({ campaignId }: { campaignId?: string | null }) {
   const PAPER_TOP = "30vh";
   const PAPER_W = "60vw";
 
   // —— 文案：标题 / 日期 / Summary（显示与下载共用同一份） ——
   const title = "Forest Adventure";
-  const date  = "10th/Aug 2025";
-  const summaryText = `
+  const date = "10th/Aug 2025";
+  const initialSummary = `
 The adventurers gathered at the gates of the Forgotten Forest, answering
 the call of a troubled village. Rumors spoke of strange lights among
 the trees and whispers of a long-lost kingdom hidden beneath the roots
@@ -326,9 +365,64 @@ the dragon’s lair awaited them, and that their greatest trial had only
 just begun.
 `.trim(); // 去掉首尾空行
 
+  // —— 新增：编辑状态 & 文本 state ——
+  const [editable, setEditable] = useState(false);
+  const [summary, setSummary] = useState(initialSummary);
+  const [summaryId, setSummaryId] = useState<string | null>(null);
+
+  useEffect(() => {
+    // If a campaignId is provided, fetch campaigns and extract the latest session summary for that campaign
+    if (!campaignId) return;
+
+    fetch(`/api/data`)
+      .then((res) => res.json())
+      .then((data) => {
+        const campaigns = data.campaigns || [];
+        const camp = campaigns.find((c: any) => c.id === campaignId);
+        if (camp) {
+          // Check if History asked us to open a specific summary id
+          let handled = false;
+          try {
+            if (typeof window !== "undefined") {
+              const sel = localStorage.getItem("currentSummaryId");
+              if (sel) {
+                const found = Array.isArray(camp.sessionSummaries)
+                  ? camp.sessionSummaries.find((s: any) => s.id === sel)
+                  : null;
+                if (found) {
+                  setSummary(found.content || initialSummary);
+                  setSummaryId(found.id || null);
+                  handled = true;
+                }
+                try {
+                  localStorage.removeItem("currentSummaryId");
+                } catch {}
+              }
+            }
+          } catch (e) {
+            console.warn("Error reading currentSummaryId", e);
+          }
+
+          if (!handled) {
+            if (Array.isArray(camp.sessionSummaries) && camp.sessionSummaries.length > 0) {
+              // Use the most recent session summary
+              const latest = camp.sessionSummaries[camp.sessionSummaries.length - 1];
+              setSummary(latest.content || initialSummary);
+              setSummaryId(latest.id || null);
+            } else {
+              // Explicitly indicate there's no summary for this campaign
+              setSummary("There is no summary for this campaign.");
+              setSummaryId(null);
+            }
+          }
+        }
+      })
+      .catch((err) => console.error("Failed to load session summary:", err));
+  }, [campaignId]);
+
   // —— 点击下载：导出为 .txt（UTF-8） ——
   const downloadSummary = () => {
-    const content = `${title}\n${date}\n\n${summaryText}\n`;
+    const content = `${title}\n${date}\n\n${summary}\n`;
     const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -401,7 +495,7 @@ just begun.
           </div>
         </div>
 
-        {/* 文字总结，可滚动（高度略缩） */}
+        {/* 文字总结（可编辑） */}
         <div className="mt-6">
           <div
             className="relative w-full"
@@ -416,17 +510,99 @@ just begun.
               overflowY: "auto",
             }}
           >
-            <span
-              style={{
-                color: "#333",
-                fontFamily: '"Inter", sans-serif',
-                fontSize: 16,
-                lineHeight: "1.6",
-                whiteSpace: "pre-line",
-              }}
-            >
-              {summaryText}
-            </span>
+            {/* 右上角编辑图标 */}
+            {!editable && (
+              <button
+                className="absolute top-2 right-2 p-2 rounded-md hover:bg-black/10 transition cursor-pointer"
+                onClick={() => setEditable(true)}
+                aria-label="Edit summary"
+                title="Edit"
+              >
+                {/* 简单的✏️；你也可以换成SVG或图片 */}
+                ✏️
+              </button>
+            )}
+
+            {editable ? (
+              <>
+                <textarea
+                  value={summary}
+                  onChange={(e) => setSummary(e.target.value)}
+                  className="w-full h-[160px] bg-white p-3 rounded-md border border-gray-300 text-[#333] font-sans text-[16px] leading-[1.6] resize-none focus:outline-none focus:ring-2 focus:ring-[#A43718]"
+                />
+                <div className="flex justify-end mt-3">
+                  <button
+                    onClick={async () => {
+                          if (!campaignId) {
+                            alert("No campaign selected to save summary to.");
+                            return;
+                          }
+
+                          console.log("Saving summary", { campaignId, summaryId, length: summary?.length });
+
+                          try {
+                            // Pre-check: ensure campaign exists on server to avoid 404
+                            const listRes = await fetch("/api/data");
+                            if (!listRes.ok) {
+                              console.warn("Failed to fetch campaigns before save", listRes.status);
+                            } else {
+                              const listJson = await listRes.json().catch(() => ({}));
+                              const campaigns = listJson?.campaigns || [];
+                              const found = campaigns.find((c: any) => c.id === campaignId);
+                              if (!found) {
+                                const msg = `Campaign with id ${campaignId} not found on server.`;
+                                console.error(msg, { available: campaigns.map((c: any) => c.id) });
+                                alert(msg);
+                                return;
+                              }
+                            }
+
+                            const res = await fetch(`/api/data?type=summary`, {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ campaignId, content: summary, summaryId }),
+                            });
+
+                            const body = await res.text();
+                            let parsed: any = null;
+                            try {
+                              parsed = JSON.parse(body);
+                            } catch {}
+
+                            if (!res.ok) {
+                              const errMsg = (parsed && parsed.error) || `Save failed (status ${res.status})`;
+                              console.error("Save failed", { status: res.status, body: parsed || body });
+                              throw new Error(errMsg);
+                            }
+
+                            const json = parsed || {};
+                            if (json?.summary?.content) setSummary(json.summary.content);
+                            if (json?.summary?.id) setSummaryId(json.summary.id);
+                            setEditable(false);
+                          } catch (e: any) {
+                            console.error("Failed to save summary:", e);
+                            alert(e?.message || "Failed to save summary");
+                          }
+                        }}
+                    className="px-4 py-2 bg-[#A43718] text-white rounded-md hover:opacity-90 active:scale-95 transition"
+                  >
+                    Save
+                  </button>
+                </div>
+              </>
+            ) : (
+              <span
+                style={{
+                  color: "#333",
+                  fontFamily: '"Inter", sans-serif',
+                  fontSize: 16,
+                  lineHeight: "1.6",
+                  whiteSpace: "pre-line",
+                }}
+              >
+                {summary}
+              </span>
+            )}
           </div>
         </div>
       </div>
@@ -437,12 +613,16 @@ just begun.
 /********* ===== Components 5: 角色轮播（3 张位，支持 N>=3 环绕；含搜索命中动画） **********/
 function CharacterCarouselStacked({
   searchName = "",
+  campaignIdProp,
 }: {
   searchName?: string;
+  campaignIdProp?: string | undefined | null;
 }) {
   const params = useParams();
   const [campaignId, setCampaignId] = useState<string | undefined>(undefined);
-  const [items, setItems] = useState<Array<{ name: string; img: string; details: string }>>([]);
+  const [items, setItems] = useState<
+    Array<{ name: string; img: string; details: string }>
+  >([]);
   const [loading, setLoading] = useState(true);
   const [cur, setCur] = useState(0);
   const [direction, setDirection] = useState<"left" | "right">("right");
@@ -457,44 +637,57 @@ function CharacterCarouselStacked({
 
   // On mount, determine campaignId
   useEffect(() => {
+    // Prefer prop if provided
+    if (campaignIdProp) {
+      setCampaignId(campaignIdProp as string | undefined);
+      return;
+    }
+
     let id = params?.id;
     if (Array.isArray(id)) {
       id = id[0];
     }
-    
+
     // If URL has template string or no id, use localStorage instead
-    if (!id || id === '${campaignId}' || id === '%24%7BcampaignId%7D') {
-      if (typeof window !== 'undefined') {
-        id = localStorage.getItem('currentCampaignId') || undefined;
+    if (!id || id === "${campaignId}" || id === "%24%7BcampaignId%7D") {
+      if (typeof window !== "undefined") {
+        id = localStorage.getItem("currentCampaignId") || undefined;
       }
     }
-    
+
     setCampaignId(id as string | undefined);
-  }, [params]);
+  }, [params, campaignIdProp]);
 
   // Fetch roles from database
   useEffect(() => {
     if (!campaignId) {
-      console.log('No campaignId available, skipping fetch');
+      console.log("No campaignId available, skipping fetch");
       setLoading(false);
       return;
     }
-    console.log('Fetching roles for campaignId:', campaignId);
+    console.log("Fetching roles for campaignId:", campaignId);
     setLoading(true);
     fetch(`/api/data?type=roles&campaignId=${campaignId}`)
       .then((res) => {
-        console.log('API response status:', res.status);
+        console.log("API response status:", res.status);
         return res.json();
       })
       .then((data) => {
-        console.log('API response data:', data);
+        console.log("API response data:", data);
         if (data.roles && Array.isArray(data.roles)) {
           const processedRoles = data.roles.map((role: any) => {
-            console.log(`Character "${role.name}" image data:`, role.img ? role.img.substring(0, 50) + '...' : 'NO IMAGE');
+            console.log(
+              `Character "${role.name}" image data:`,
+              role.img ? role.img.substring(0, 50) + "..." : "NO IMAGE"
+            );
             return {
               name: role.name,
               img: role.img || "/Griff.png",
-              details: role.details || `Level ${role.level || 1} character. No detailed description available yet.`
+              details:
+                role.details ||
+                `Level ${
+                  role.level || 1
+                } character. No detailed description available yet.`,
             };
           });
           setItems(processedRoles);
@@ -503,7 +696,7 @@ function CharacterCarouselStacked({
         }
       })
       .catch((err) => {
-        console.error('API fetch error:', err);
+        console.error("API fetch error:", err);
         setItems([]);
       })
       .finally(() => setLoading(false));
@@ -511,7 +704,7 @@ function CharacterCarouselStacked({
 
   // Helper functions (always defined)
   const mod = (i: number, m: number) => ((i % m) + m) % m;
-  
+
   const prev = () => {
     setDirection("left");
     setCur((v) => mod(v - 1, N));
@@ -549,16 +742,33 @@ function CharacterCarouselStacked({
   if (loading) {
     return <div className="text-center text-white">Loading characters...</div>;
   }
-  
+
   if (N === 0) {
     return (
       <div className="text-center text-white">
         No characters found.
-        <div style={{fontSize: 12, marginTop: 16, textAlign: 'left', background: '#222', padding: 8, borderRadius: 4, maxWidth: 600, margin: '16px auto'}}>
-          <strong>Debug Info:</strong><br/>
-          URL campaignId: {params?.id ? String(params.id) : 'undefined'}<br/>
-          localStorage campaignId: {typeof window !== 'undefined' ? localStorage.getItem('currentCampaignId') : 'N/A'}<br/>
-          Final campaignId: {campaignId || 'undefined'}
+        <div
+          style={{
+            fontSize: 12,
+            marginTop: 16,
+            textAlign: "left",
+            background: "#222",
+            padding: 8,
+            borderRadius: 4,
+            maxWidth: 600,
+            margin: "16px auto",
+          }}
+        >
+          <strong>Debug Info:</strong>
+          <br />
+          URL campaignId: {params?.id ? String(params.id) : "undefined"}
+          <br />
+          localStorage campaignId:{" "}
+          {typeof window !== "undefined"
+            ? localStorage.getItem("currentCampaignId")
+            : "N/A"}
+          <br />
+          Final campaignId: {campaignId || "undefined"}
         </div>
       </div>
     );
@@ -692,8 +902,8 @@ function CharacterCarouselStacked({
                       className="h-full w-full object-cover rounded-[20px] border border-[#E9E9E9]"
                       onError={(e) => {
                         const target = e.target as HTMLImageElement;
-                        if (target.src !== '/Griff.png') {
-                          target.src = '/Griff.png';
+                        if (target.src !== "/Griff.png") {
+                          target.src = "/Griff.png";
                         }
                       }}
                     />
@@ -780,7 +990,10 @@ function CharacterCarouselStacked({
             {/* Front */}
             <div
               className="absolute inset-0 rounded-[20px] border border-[#E9E9E9] [backface-visibility:hidden] overflow-hidden"
-              style={{ background: type === "left" || type === "right" ? "#FFFFFF" : undefined }}
+              style={{
+                background:
+                  type === "left" || type === "right" ? "#FFFFFF" : undefined,
+              }}
             >
               <div
                 className="absolute"
@@ -797,8 +1010,8 @@ function CharacterCarouselStacked({
                   className="h-full w-full object-cover rounded-[20px] border border-[#E9E9E9]"
                   onError={(e) => {
                     const target = e.target as HTMLImageElement;
-                    if (target.src !== '/Griff.png') {
-                      target.src = '/Griff.png';
+                    if (target.src !== "/Griff.png") {
+                      target.src = "/Griff.png";
                     }
                   }}
                 />
@@ -943,7 +1156,13 @@ function CharacterCarouselStacked({
       {/* 三张位 */}
       <div className="relative" style={{ height: 438 }}>
         <Card data={items[idxL]} type="left" index={idxL} />
-        <Card data={items[cur]} type="center" index={cur} isActive direction={direction} />
+        <Card
+          data={items[cur]}
+          type="center"
+          index={cur}
+          isActive
+          direction={direction}
+        />
         <Card data={items[idxR]} type="right" index={idxR} />
       </div>
 
