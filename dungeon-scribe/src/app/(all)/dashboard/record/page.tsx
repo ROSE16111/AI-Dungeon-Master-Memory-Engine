@@ -12,6 +12,7 @@ import { useRouter, useParams } from "next/navigation";
 import { useTranscript } from "../../../context/TranscriptContext";
 import { ragAnswer } from "@/lib/ragClient";
 type CharItem = { name: string; img: string; details: string };
+import type { Variants } from "framer-motion"
 
 // lock <body>
 function useLockBodyScroll() {
@@ -154,6 +155,54 @@ function SearchMapsBar({
     </>
   );
 }
+
+async function endStreamAndWait(): Promise<void> {
+  const sess = (window as any).__asrSession || null;
+  const ws: WebSocket | undefined = sess?.ws;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+  // Promise resolves when we see {"status":"ended"}
+  const ended = new Promise<void>((resolve) => {
+    const onMsg = (ev: MessageEvent) => {
+      try {
+        const raw =
+          typeof ev.data === "string"
+            ? ev.data
+            : ev.data instanceof ArrayBuffer
+            ? new TextDecoder().decode(ev.data)
+            : String(ev.data);
+
+        // handle one-or-many-per-frame
+        for (const line of raw.split(/\r?\n/)) {
+          const m = line.trim().match(/\{.*\}$/);
+          const body = m ? m[0] : line.trim();
+          const payload = JSON.parse(body);
+          if (payload?.status === "ended") {
+            ws.removeEventListener("message", onMsg);
+            resolve();
+            return;
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    };
+    ws.addEventListener("message", onMsg);
+
+    // safety timeout so we don't hang forever
+    setTimeout(() => {
+      ws.removeEventListener("message", onMsg);
+      resolve();
+    }, 5000);
+  });
+
+  try {
+    ws.send("__END__");         // <-- send the TEXT frame the server looks for
+  } catch {}
+
+  await ended;                  // <-- wait for drain + ack
+}
+
 
 // Sessions / Characters
 function TitleWithFilter({
@@ -396,7 +445,7 @@ const CharacterCarouselStacked = forwardRef(function CharacterCarouselStacked(
         scale: 0.96,
         transition: { duration: 0.22 },
       }),
-    };
+    } satisfies Variants;
 
     if (isCenter) {
       return (
@@ -1261,13 +1310,25 @@ function escapeHtml(s: string) {
 
 export default function RecordPage() {
   useEffect(() => {
-    const sess = (window as any).__asrSession;
-    if (sess?.ws instanceof WebSocket) {
-      console.log("[ASR] Rebinding handlers to existing WS session");
-      bindWsHandlers(sess.ws); // ← 关键：把你刚才的 onmessage 换成新的
-      setIsRecording(sess.ws.readyState === WebSocket.OPEN);
-    }
-  }, []);
+  const sess = (window as any).__asrSession;
+  if (sess?.ws instanceof WebSocket) {
+    console.log("[ASR] Rebinding handlers to existing WS session");
+    bindWsHandlers(sess.ws);
+    setIsRecording(sess.ws.readyState === WebSocket.OPEN);
+
+    // NEW: re-send campaignId after rebind (no 'open' event here)
+    (async () => {
+      try {
+        const res = await fetch("/api/current-campaign");
+        const { id } = await res.json();
+        if (id) {
+          sess.ws.send(JSON.stringify({ type: "set_campaign", campaignId: id }));
+          console.log("[ASR] re-sent set_campaign on mount:", id);
+        }
+      } catch {}
+    })();
+  }
+}, []);
 
   useLockBodyScroll();
   // const { transcript, setTranscript } = useTranscript();
@@ -1558,6 +1619,14 @@ export default function RecordPage() {
         const node = existing.node;
         // Re-bind WS handlers to resume receiving results
         if (ws instanceof WebSocket) bindWsHandlers(ws);
+        try {
+          const res = await fetch("/api/current-campaign", { method: "GET" });
+          const { id: resumedCampaignId } = await res.json();
+          if (resumedCampaignId) {
+            ws.send(JSON.stringify({ type: "set_campaign", campaignId: resumedCampaignId }));
+            console.log("[ASR] re-sent set_campaign on resume:", resumedCampaignId);
+          }
+        } catch {}
         // Re-attach worklet send handler so audio resumes being sent
         if (node && node.port) {
           node.port.onmessage = (ev: any) => {
@@ -1627,7 +1696,10 @@ export default function RecordPage() {
       //   })()
       // );
       // 1) 创建 WS（建议用你已经写好的 wsURL()）
-      const ws = new WebSocket(wsURL());
+      const base = wsURL();
+      const res = await fetch("/api/current-campaign", { method: "GET" });
+      const { id: campaignId } = await res.json();
+      const ws = new WebSocket(campaignId ? `${base}?campaignId=${encodeURIComponent(campaignId)}` : base);
 
       // 2) 绑定统一的事件处理器（open/close/error/message 全在里面）
       bindWsHandlers(ws);
@@ -1638,6 +1710,9 @@ export default function RecordPage() {
 
       ws.addEventListener("open", () => {
         open = true;
+        if (campaignId) {
+          ws.send(JSON.stringify({ type: "set_campaign", campaignId }));
+        }
         while (queue.length) {
           const buf = queue.shift()!;
           try {
@@ -1685,11 +1760,11 @@ export default function RecordPage() {
       }
 
       // Stop processing WS messages locally but don't close the socket; keep it for resume
-      if (sess?.ws) {
-        try {
-          sess.ws.onmessage = null;
-        } catch {}
-      }
+      // if (sess?.ws) {
+      //   try {
+      //     sess.ws.onmessage = null;
+      //   } catch {}
+      // }
 
       // Mark session as paused
       if (sess) (sess as any).paused = true;
@@ -1740,7 +1815,7 @@ export default function RecordPage() {
           sess.ws.onerror = null;
         } catch {}
         try {
-          if (sess.ws.readyState === WebSocket.OPEN) sess.ws.close();
+          if (sess.ws.readyState === WebSocket.OPEN) sess.ws.close(1000, "done");
         } catch {}
       }
 
@@ -1762,6 +1837,7 @@ export default function RecordPage() {
   // End Session: save AI summary to DB (update existing summary if present), cleanup and navigate
   const handleEndSession = async () => {
     // Use stored campaign id and summary from transcript context
+    try { await endStreamAndWait(); } catch {}
     const campaignId = currentCampaignId || null;
     const campaignTitle = (window?.localStorage?.getItem("currentCampaignTitle") || "Untitled Campaign").trim();
     const summaryText = summary || "";

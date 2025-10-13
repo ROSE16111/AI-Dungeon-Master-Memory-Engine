@@ -247,3 +247,74 @@ export async function summarizeDnDSession(rawText: string): Promise<string> {
   const joined = miniSummaries.join("\n");
   return joined.length > 4000 ? joined.slice(0, 4000) + "\n…" : joined;
 }
+
+/** Attempts to parse possibly messy JSON by trimming code fences etc. */
+function safeJSON<T = any>(raw: string): T | null {
+  try {
+    // strip triple-backticks or leading text
+    const m = raw.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
+    const body = m ? m[0] : raw;
+    return JSON.parse(body) as T;
+  } catch {
+    return null;
+  }
+}
+
+/** Extract characters mentioned in the transcript as structured records. */
+export type CharacterCard = {
+  name: string;
+  role?: string;          // e.g., "wizard", "innkeeper", "half-elf ranger"
+  affiliation?: string;   // faction, party, town etc.
+  traits?: string[];      // short descriptors
+  goals?: string[];       // stated aims/quests
+  lastLocation?: string;  // last explicit place mentioned
+  status?: string;        // e.g., injured, missing, hostile, allied
+  notes?: string;         // free text fallback
+};
+
+export async function extractCharactersFromSession(rawText: string): Promise<CharacterCard[]> {
+  const text = (rawText ?? "").trim();
+  if (!text) return [];
+
+  const prompt = `You are extracting CHARACTER CARDS from a TTRPG (D&D) transcript CHUNK.
+
+    STRICT RULES:
+    - USE ONLY facts explicitly stated in this chunk.
+    - IGNORE table/OOC chatter (jokes, small talk, scheduling, rules debate, audio/mic, snacks, meta, “back to the game”).
+    - DO NOT invent or “fix” names/roles/places/relationships.
+    - If a field is unknown in this chunk, omit it.
+    - If this chunk is only OOC/table talk, return [].
+
+    Return STRICT JSON ONLY (no commentary), as:
+    [
+      {
+        "name": "Exact Name As Said",
+        "role": "short role/class/descriptor if stated",
+        "affiliation": "group/town/faction if stated",
+        "traits": ["1-5 short traits actually said"],
+        "goals": ["1-5 explicit goals or tasks"],
+        "lastLocation": "last explicit location",
+        "status": "hostile/allied/injured/captive/etc if stated",
+        "notes": "one short line only if useful"
+      }
+    ]
+
+    TRANSCRIPT CHUNK:
+    ${text}`;
+
+  const out = await callLLM(prompt, "LLM_chars_chunk");
+  const parsed = safeJSON<CharacterCard[]>(out) ?? [];
+  // de-dupe by name
+  const seen = new Set<string>();
+  const unique = parsed.filter(c => {
+    const k = (c?.name || "").trim().toLowerCase();
+    if (!k) return false;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  return unique.slice(0, 25);
+}
+
+
+
