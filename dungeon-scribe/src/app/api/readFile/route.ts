@@ -109,25 +109,54 @@ async function pdfToPngs(pdfAbsPath: string, dpi = 300): Promise<string[]> {
 }
 
 // 兜底：用 pdfjs 直接抽取文字（不经 OCR）
-async function extractPdfTextByPdfjs(pdfAbsPath: string): Promise<string> {
-  try {
-    const pdfjsLib = await import("pdfjs-dist");
-    // 一些运行环境需要设置 workerSrc，这里用 node 的默认打包流程通常可省略
-    // @ts-ignore
-    const loadingTask = pdfjsLib.getDocument(pdfAbsPath as any);
-    const pdf = await loadingTask.promise;
+// async function extractPdfTextByPdfjs(pdfAbsPath: string): Promise<string> {
+//   try {
+//     const pdfjsLib = await import("pdfjs-dist");
+//     // 一些运行环境需要设置 workerSrc，这里用 node 的默认打包流程通常可省略
+//     // @ts-ignore
+//     const loadingTask = pdfjsLib.getDocument(pdfAbsPath as any);
+//     const pdf = await loadingTask.promise;
 
-    let out = "";
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const content = await page.getTextContent();
-      const strings = content.items.map((it: any) => it.str).filter(Boolean);
-      out += strings.join(" ") + "\n\n";
-    }
-    return out.trim();
-  } catch (e) {
-    throw new Error("pdfjs extract failed: " + (e as Error).message);
+//     let out = "";
+//     for (let i = 1; i <= pdf.numPages; i++) {
+//       const page = await pdf.getPage(i);
+//       const content = await page.getTextContent();
+//       const strings = content.items.map((it: any) => it.str).filter(Boolean);
+//       out += strings.join(" ") + "\n\n";
+//     }
+//     return out.trim();
+//   } catch (e) {
+//     throw new Error("pdfjs extract failed: " + (e as Error).message);
+//   }
+// }
+// 兜底：用 Poppler 的 pdftotext 直接抽文字（不需要 pdfjs / canvas）
+const PDFTOTEXT_CANDIDATES = [
+  process.env.PDFTOTEXT_PATH, // 你可以在 .env 指定
+  "D:\\poppler\\Library\\bin\\pdftotext.exe",
+  "D:\\poppler-25.07.0\\Library\\bin\\pdftotext.exe",
+  "pdftotext", // 已加入 PATH
+].filter(Boolean) as string[];
+
+async function resolvePdftotext(): Promise<string | null> {
+  for (const c of PDFTOTEXT_CANDIDATES) {
+    try {
+      const { stdout } = await execFileAsync(c, ["-v"], { windowsHide: true });
+      if (stdout != null || true) return c; // 能运行就认为可用
+    } catch {}
   }
+  return null;
+}
+
+async function extractPdfTextByPoppler(pdfAbsPath: string): Promise<string> {
+  const pdftotext = await resolvePdftotext();
+  if (!pdftotext) throw new Error("pdftotext not found");
+  // -layout 保持大致排版，-enc UTF-8 输出到 stdout（'-'）
+  const args = ["-layout", "-enc", "UTF-8", pdfAbsPath, "-"];
+  const { stdout } = await execFileAsync(pdftotext, args, {
+    windowsHide: true,
+    maxBuffer: 1024 * 1024 * 64,
+  });
+  return (stdout || "").toString();
 }
 
 /** ======== 3) 主处理逻辑 ======== */
@@ -209,7 +238,7 @@ export async function GET(req: NextRequest) {
       } catch (ocrErr: any) {
         // 兜底：尝试 pdfjs 直接抽文本（某些扫描件没有文本就会空）
         try {
-          const direct = await extractPdfTextByPdfjs(absPath);
+          const direct = await extractPdfTextByPoppler(absPath);
           if (direct.trim()) {
             return NextResponse.json({
               ok: true,

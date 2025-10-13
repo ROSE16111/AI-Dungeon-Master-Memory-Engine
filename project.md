@@ -12,11 +12,10 @@ src/app/
 
 │  ├─ resources/
 │  │  ├─ page.tsx                   // /resources  （页内 Tabs: Maps | Background）
-│  │  ├─ maps/                      // （可选）想做子路由就加
-│  │  │  └─ page.tsx                // /resources/maps
-│  │  └─ background/
-│  │     └─ page.tsx                // /resources/background
-
+         └─ mapview/
+            └─ [id]/
+               └─ page.tsx 
+               
 │  ├─ history/
 │  │  ├─ page.tsx                   // /history （页内 Tabs: All | Completed）
 │  │  ├─ all/                       // （可选）子路由版
