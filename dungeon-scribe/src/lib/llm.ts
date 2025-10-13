@@ -118,8 +118,11 @@ async function summarizeChunk(
         - If a detail is uncertain in THIS CHUNK, omit it (do not guess).
 
         Output format:
-        - 3-8 bullets, each starting with "• ".
-        - Short, factual bullets only.
+        - Write 2–4 sections for THIS CHUNK.
+        - Each section MUST be:
+          Line 1: SHORT TITLE
+          Line 2..3: 1–3 factual sentences
+        - Blank line between sections. No bullets, no numbering, no "###".
         - Focus on the following (if stated): plot beats, explicit NPC names/roles, locations actually visited, items gained/lost, important player decisions and their consequences, hooks/next steps that were said.
 
         CHUNK TEXT:
@@ -168,8 +171,11 @@ async function mergeSummaries(summaries: string[]): Promise<string> {
         - If two bullets contradict, prefer whichever is clearer and keep it neutral (omit speculation).
 
         OUTPUT:
-        - ≤10 bullets total, each starting with "• ".
-        - No headings, no numbering, no meta-notes—bullets only.
+        - Write 4–10 sections total.
+        - Each section MUST be:
+          Line 1: SHORT TITLE (no hashes, bullets, or numbers)
+          Line 2..3: 1–3 factual sentences
+        - One blank line between sections.
         - Focus on the following (if stated): plot beats, explicit NPC names/roles, locations actually visited, items gained/lost, important player decisions and their consequences, hooks/next steps that were said.
 
         CHUNK SUMMARIES:
@@ -205,8 +211,13 @@ export async function summarizeDnDSession(rawText: string): Promise<string> {
         - If something is unclear or missing, omit it.
 
         OUTPUT:
-        - 5-10 bullets, each starting with "• ".
-        - Keep bullets short and factual.
+        - Write 4–8 sections.
+        - Each section MUST be:
+          Line 1: A SHORT TITLE on its own line (no hashes, no numbers, no bullets).
+          Line 2..3: 1–3 sentences of concise prose describing only facts from the text.
+        - Put ONE blank line between sections.
+        - Do NOT use lists or bullets. Do NOT add "###" or any other heading markup.
+        - Keep proper nouns exactly as written.
         - Focus on the following (if stated): plot beats, explicit NPC names/roles, locations actually visited, items gained/lost, important player decisions and their consequences, hooks/next steps that were said.
         - No meta-comments, no headings, no numbering, no analysis, no advice, no rules talk.
 
@@ -248,10 +259,9 @@ export async function summarizeDnDSession(rawText: string): Promise<string> {
   return joined.length > 4000 ? joined.slice(0, 4000) + "\n…" : joined;
 }
 
-/** Attempts to parse possibly messy JSON by trimming code fences etc. */
+/** Attempts to parse possibly messy JSON */
 function safeJSON<T = any>(raw: string): T | null {
   try {
-    // strip triple-backticks or leading text
     const m = raw.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
     const body = m ? m[0] : raw;
     return JSON.parse(body) as T;
@@ -304,7 +314,6 @@ export async function extractCharactersFromSession(rawText: string): Promise<Cha
 
   const out = await callLLM(prompt, "LLM_chars_chunk");
   const parsed = safeJSON<CharacterCard[]>(out) ?? [];
-  // de-dupe by name
   const seen = new Set<string>();
   const unique = parsed.filter(c => {
     const k = (c?.name || "").trim().toLowerCase();

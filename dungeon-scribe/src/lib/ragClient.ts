@@ -1,10 +1,9 @@
-// lib/ragClient.ts
 export type RAGUsed = { id: string; text: string; metadata: any };
 
 export async function ragAnswer({
     question,
     topK = 5,
-    where = { type: "raw" },   // default to RAW
+    where = { type: "raw" }, 
     }: {
     question: string;
     topK?: number;
