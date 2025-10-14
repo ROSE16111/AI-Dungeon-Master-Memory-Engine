@@ -337,33 +337,9 @@ function CardOnPaper({ campaignId }: { campaignId?: string | null }) {
   const PAPER_W = "60vw";
 
   // —— 文案：标题 / 日期 / Summary（显示与下载共用同一份） ——
-  const title = "Forest Adventure";
-  const date = "10th/Aug 2025";
-  const initialSummary = `
-The adventurers gathered at the gates of the Forgotten Forest, answering
-the call of a troubled village. Rumors spoke of strange lights among
-the trees and whispers of a long-lost kingdom hidden beneath the roots
-of ancient oaks.
-
-As they pressed deeper, the party encountered goblin scouts. The battle
-was fierce, yet through clever tactics and teamwork, the heroes prevailed.
-Along the way, they uncovered fragments of ruined stone walls, etched
-with symbols that none could fully decipher.
-
-Deeper inside, an abandoned shrine revealed an ominous prophecy about a
-slumbering dragon whose awakening would bring fire and ruin to the realm.
-Though unsettled, the group pressed onward, determined to uncover the truth.
-
-Nightfall found them resting near a broken watchtower, where an old
-hermit warned them: "The mountain does not forgive the careless, and
-the dragon remembers all who trespass." His words left a chill in the
-adventurers’ hearts.
-
-The session ended with the party gazing at the looming mountains in the
-distance, where a faint red glow pulsed in the night sky — a sign that
-the dragon’s lair awaited them, and that their greatest trial had only
-just begun.
-`.trim(); // 去掉首尾空行
+  const [title, setTitle] = useState("");
+  const [date, setDate] = useState("");
+  const initialSummary = ``.trim(); // 去掉首尾空行
 
   // —— 新增：编辑状态 & 文本 state ——
   const [editable, setEditable] = useState(false);
@@ -373,13 +349,16 @@ just begun.
   useEffect(() => {
     // If a campaignId is provided, fetch campaigns and extract the latest session summary for that campaign
     if (!campaignId) return;
-
     fetch(`/api/data`)
       .then((res) => res.json())
       .then((data) => {
         const campaigns = data.campaigns || [];
         const camp = campaigns.find((c: any) => c.id === campaignId);
         if (camp) {
+          // Wire visible title and update date to campaign data
+          if (camp.title) setTitle(camp.title);
+          if (camp.updateDate) setDate(new Date(camp.updateDate).toLocaleString());
+
           // Check if History asked us to open a specific summary id
           let handled = false;
           try {
@@ -578,6 +557,8 @@ just begun.
                             const json = parsed || {};
                             if (json?.summary?.content) setSummary(json.summary.content);
                             if (json?.summary?.id) setSummaryId(json.summary.id);
+                            // If server returned campaign updateDate, refresh displayed date
+                            if (json?.campaign?.updateDate) setDate(new Date(json.campaign.updateDate).toLocaleString());
                             setEditable(false);
                           } catch (e: any) {
                             console.error("Failed to save summary:", e);

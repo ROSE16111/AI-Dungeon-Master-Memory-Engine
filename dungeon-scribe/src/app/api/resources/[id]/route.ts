@@ -20,6 +20,7 @@ export async function GET(
   _req: Request,
   ctx: { params: Promise<{ id: string }> }   // 👈 Next 15: params 是 Promise
 ) {
+  const { id } = await params; 
   try {
     const { id } = await ctx.params;         // 👈 先 await
     const campaignId = await getCurrentCampaignId();
@@ -28,6 +29,7 @@ export async function GET(
     }
 
     const r = await prisma.resource.findFirst({
+      where: { id, campaignId },
       where: { id, campaignId },
       select: {
         id: true,
@@ -61,6 +63,7 @@ export async function DELETE(
   _req: Request,
   ctx: { params: Promise<{ id: string }> }   // 👈 Promise
 ) {
+  const { id } = await params;
   try {
     const { id } = await ctx.params;         // 👈 await
     const campaignId = await getCurrentCampaignId();
@@ -70,6 +73,7 @@ export async function DELETE(
 
     // 1) 先校验：该资源属于当前战役；同时把 fileUrl 取出来用于删除文件
     const exist = await prisma.resource.findFirst({
+      where: { id, campaignId },
       where: { id, campaignId },
       select: { id: true, fileUrl: true },
     });
@@ -93,6 +97,7 @@ export async function DELETE(
     }
 
     // 3) 删除数据库记录
+    await prisma.resource.delete({ where: { id } });
     await prisma.resource.delete({ where: { id } });
 
     return NextResponse.json({ ok: true }, { status: 200 });
@@ -137,11 +142,13 @@ export async function PATCH(
     // 先确保这条资源属于当前战役
     const exist = await prisma.resource.findFirst({
       where: { id, campaignId },
+      where: { id, campaignId },
       select: { id: true },
     });
     if (!exist) return NextResponse.json({ ok: false, error: "not found" }, { status: 404 });
 
     const updated = await prisma.resource.update({
+      where: { id },
       where: { id },
       data,
     });
