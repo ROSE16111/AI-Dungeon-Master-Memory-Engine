@@ -19,7 +19,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket, WebSock
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
-from starlette.websockets import WebSocketState 
+from starlette.websockets import WebSocketState
 
 # =====================================================================
 # SETTINGS
@@ -56,17 +56,21 @@ MAX_CHARS_PER_DOC = int(os.getenv("MAX_CHARS_PER_DOC", "800"))
 STOP_SENTINEL = os.getenv("STOP_SENTINEL", "<END>")
 MAX_PREDICT = int(os.getenv("MAX_PREDICT", "96"))
 ANSWER_ECHO_ONLY = os.getenv("ANSWER_ECHO_ONLY", "0") == "1"
+MAX_UTTER_SEC = float(os.getenv("MAX_UTTER_SEC", "12.0"))
 
 SUMMARY_MIN_FLUSH_CHARS = int(os.getenv("SUMMARY_MIN_FLUSH_CHARS", "80"))
 SUMMARY_FORCE_FLUSH_AFTER_FINAL = os.getenv("SUMMARY_FORCE_FLUSH_AFTER_FINAL", "1") == "1"
 SUMMARY_DRAIN_TIMEOUT = float(os.getenv("SUMMARY_DRAIN_TIMEOUT", "5.0"))
 SESSION_IDLE_SEC = float(os.getenv("SESSION_IDLE_SEC", "8.0"))
-last_upsert_t = 0.0
-UPSERT_COOLDOWN = float(os.getenv("UPSERT_COOLDOWN", "10.0"))
 
-MAX_UPSERT_CHARS = int(os.getenv("MAX_UPSERT_CHARS", "800"))
-CHAR_UPSERT_CONNECT_TIMEOUT = float(os.getenv("CHAR_UPSERT_CONNECT_TIMEOUT", "2"))
-CHAR_UPSERT_READ_TIMEOUT = float(os.getenv("CHAR_UPSERT_READ_TIMEOUT", "180"))
+# [CHAR-SUMMARY OFF] Character upsert throttling vars (unused now)
+# last_upsert_t = 0.0
+# UPSERT_COOLDOWN = float(os.getenv("UPSERT_COOLDOWN", "10.0"))
+
+# [CHAR-SUMMARY OFF] Character upsert posting sizes/timeouts (unused now)
+# MAX_UPSERT_CHARS = int(os.getenv("MAX_UPSERT_CHARS", "800"))
+# CHAR_UPSERT_CONNECT_TIMEOUT = float(os.getenv("CHAR_UPSERT_CONNECT_TIMEOUT", "2"))
+# CHAR_UPSERT_READ_TIMEOUT = float(os.getenv("CHAR_UPSERT_READ_TIMEOUT", "180"))
 
 # =====================================================================
 # SHARED CLIENTS (Whisper, VAD)
@@ -630,7 +634,8 @@ async def handle_audio_ws(websocket: WebSocket):
         cooldown_sec=0.5
     )
 
-    CHAR_UPSERT_URL = os.getenv("CHAR_UPSERT_URL", "http://127.0.0.1:3000/api/characters/upsert")
+    # [CHAR-SUMMARY OFF] Character upsert URL (unused now)
+    # CHAR_UPSERT_URL = os.getenv("CHAR_UPSERT_URL", "http://127.0.0.1:3000/api/characters/upsert")
     campaign_id: Optional[str] = None
 
     try:
@@ -650,50 +655,18 @@ async def handle_audio_ws(websocket: WebSocket):
     except Exception:
         pass
 
-    async def _post_characters_chunk_local(campaign_id_: Optional[str], text: str):
-        if not campaign_id_ or not text or not CHAR_UPSERT_URL:
-            if not campaign_id_:
-                print("[CharUpsert] skipped: no campaign_id")
-            return
-
-        def _do_post():
-            try:
-                body_text = text[:MAX_UPSERT_CHARS] 
-                resp = requests.post(
-                    CHAR_UPSERT_URL,
-                    headers={"Content-Type": "application/json", "Connection": "close"},
-                    json={"campaignId": campaign_id_, "text": body_text},
-                    timeout=(CHAR_UPSERT_CONNECT_TIMEOUT, CHAR_UPSERT_READ_TIMEOUT),
-                    allow_redirects=False,
-                    proxies={"http": None, "https": None},
-                )
-                if not resp.ok:
-                    print(f"[CharUpsert] HTTP {resp.status_code}: {resp.text[:200]}")
-                else:
-                    print(f"[CharUpsert] ok in {resp.elapsed.total_seconds():.3f}s")
-            except requests.exceptions.Timeout:
-                print("[CharUpsert] timeout (best-effort, continuing)")
-            except Exception as e:
-                print(f"[CharUpsert] error: {e}")
-
-        await asyncio.to_thread(_do_post)
+    # [CHAR-SUMMARY OFF] Entire character upsert function disabled
+    # async def _post_characters_chunk_local(campaign_id_: Optional[str], text: str):
+    #     ...
 
     async def _flush_and_finish(reason: str):
-        global last_upsert_t 
+        # [CHAR-SUMMARY OFF] last_upsert_t used only for char upsert throttle
+        # global last_upsert_t
         leftover = rolling.flush().strip()
         if leftover:
             task = asyncio.create_task(_background_summary_task(send_queue, leftover))
             bg_tasks.add(task)
             task.add_done_callback(lambda t, s=bg_tasks: s.discard(t))
-
-            if campaign_id:
-                now_s = time.time()
-                if (now_s - last_upsert_t) >= UPSERT_COOLDOWN and len(leftover) >= 20:
-                    last_upsert_t = now_s
-                    print(f"[CharUpsert] posting {len(leftover)} chars for campaign={campaign_id}")
-                    asyncio.create_task(_post_characters_chunk_local(campaign_id, leftover))
-            else:
-                print("[CharUpsert] flush skipped: campaign_id not set")
 
         try:
             await asyncio.wait_for(asyncio.gather(*bg_tasks, return_exceptions=True), timeout=SUMMARY_DRAIN_TIMEOUT)
@@ -706,6 +679,72 @@ async def handle_audio_ws(websocket: WebSocket):
             await send_queue.put(json.dumps({"status": "ended", "reason": reason}))
         except Exception:
             pass
+
+    # --- helper: finalize current utterance now (used by silence and timeout) ---
+    async def _finalize_current_utter(reason: str = "silence"):
+        nonlocal speaking, tail, buf, last_partial_text, last_partial_t
+        try:
+            utter = np.concatenate([tail, *buf]) if buf else tail
+            wave = utter.astype(np.float32) / 32768.0
+            final_text = transcribe_float32(wave)
+            if final_text:
+                print(f"[final/{reason}] {final_text}")
+                print(f"[final/{reason}] {len(final_text.split())} words recognized.")
+                if not closing:
+                    await send_queue.put(json.dumps({"final": final_text}))
+
+                # embed live chunk
+                try:
+                    ensure_collection()
+                    doc_id = f"live_{int(time.time()*1000)}"
+                    meta = {"type": "raw", "source": "live_ws"}
+                    collection.add(ids=[doc_id], documents=[final_text], metadatas=[meta])
+                    print(f"[Embed] Added live chunk -> id={doc_id}, len={len(final_text)} chars")
+                except Exception as e:
+                    print(f"[Embed] failed to add live chunk: {e}")
+
+                # schedule summaries (NOT character summaries)
+                segments = rolling.push(final_text)
+                if isinstance(segments, str):
+                    segments = [segments] if segments else []
+                elif not isinstance(segments, list):
+                    segments = []
+                for seg in segments:
+                    seg = (seg or "").strip()
+                    if not seg:
+                        continue
+                    task = asyncio.create_task(_background_summary_task(send_queue, seg))
+                    bg_tasks.add(task)
+                    task.add_done_callback(lambda t, s=bg_tasks: s.discard(t))
+
+                # optional force flush small remainder
+                if (not segments) and SUMMARY_FORCE_FLUSH_AFTER_FINAL:
+                    small = rolling.flush()
+                    if small and len(small) >= SUMMARY_MIN_FLUSH_CHARS:
+                        task = asyncio.create_task(_background_summary_task(send_queue, small))
+                        bg_tasks.add(task)
+                        task.add_done_callback(lambda t, s=bg_tasks: s.discard(t))
+                    elif small:
+                        try:
+                            rolling._buf = [small]
+                        except Exception:
+                            pass
+        except Exception as e:
+            print(f"[WS] _finalize_current_utter failed: {e}")
+        finally:
+            # update overlap tail; reset buffers
+            utter = np.concatenate([tail, *buf]) if buf else tail
+            if utter.size >= tail.size:
+                tail = utter[-tail.size:].copy()
+            else:
+                z = np.zeros(tail.size - utter.size, dtype=np.int16)
+                tail = np.concatenate([z, utter])
+            buf.clear()
+            last_partial_text = ""
+            last_partial_t = now()
+            speaking = False
+
+    utter_start_t: Optional[float] = None
 
     try:
         while True:
@@ -744,7 +783,7 @@ async def handle_audio_ws(websocket: WebSocket):
                     closing = True
                     break
 
-                continue 
+                continue
 
             if "bytes" not in msg or msg["bytes"] is None:
                 continue
@@ -755,6 +794,7 @@ async def handle_audio_ws(websocket: WebSocket):
                 if not speaking:
                     speaking = True
                     listening_sent = False
+                    utter_start_t = now()
                     print("[State] speaking started")
                 last_voice = now()
                 buf.append(pcm16)
@@ -783,71 +823,13 @@ async def handle_audio_ws(websocket: WebSocket):
                     listening_sent = True
 
                 if speaking and (now() - last_voice) * 1000 >= SILENCE_END_MS:
-                    speaking = False
-                    utter = np.concatenate([tail, *buf]) if buf else tail
-                    wave = utter.astype(np.float32) / 32768.0
-                    try:
-                        final_text = transcribe_float32(wave)
-                        if final_text:
-                            print(f"[final] {final_text}")
-                            print(f"[final] {len(final_text.split())} words recognized.")
-                            if not closing:
-                                await send_queue.put(json.dumps({"final": final_text}))
+                    await _finalize_current_utter("silence")
 
-                            # embed live chunk
-                            try:
-                                ensure_collection()
-                                doc_id = f"live_{int(time.time()*1000)}"
-                                meta = {"type": "raw", "source": "live_ws"}
-                                collection.add(ids=[doc_id], documents=[final_text], metadatas=[meta])
-                                print(f"[Embed] Added live chunk -> id={doc_id}, len={len(final_text)} chars")
-                            except Exception as e:
-                                print(f"[Embed] failed to add live chunk: {e}")
-
-                            # schedule summaries
-                            segments = rolling.push(final_text)
-                            if isinstance(segments, str):
-                                segments = [segments] if segments else []
-                            elif not isinstance(segments, list):
-                                segments = []
-                            for seg in segments:
-                                seg = (seg or "").strip()
-                                if not seg:
-                                    continue
-                                task = asyncio.create_task(_background_summary_task(send_queue, seg))
-                                bg_tasks.add(task)
-                                task.add_done_callback(lambda t, s=bg_tasks: s.discard(t))
-
-                            # optional force flush small remainder
-                            if (not segments) and SUMMARY_FORCE_FLUSH_AFTER_FINAL:
-                                small = rolling.flush()
-                                if small and len(small) >= SUMMARY_MIN_FLUSH_CHARS:
-                                    task = asyncio.create_task(_background_summary_task(send_queue, small))
-                                    bg_tasks.add(task)
-                                    task.add_done_callback(lambda t, s=bg_tasks: s.discard(t))
-                                elif small:
-                                    try:
-                                        rolling._buf = [small]
-                                    except Exception:
-                                        pass
-
-                            # per-final character upsert
-                            if campaign_id:
-                                asyncio.create_task(_post_characters_chunk_local(campaign_id, final_text))
-                            else:
-                                print("[CharUpsert] skipped per-final: campaign_id not set")
-
-                    except Exception as e:
-                        print(f"[WS] final failed:", e)
-
-                    if utter.size >= tail.size:
-                        tail = utter[-tail.size:].copy()
-                    else:
-                        z = np.zeros(tail.size - utter.size, dtype=np.int16)
-                        tail = np.concatenate([z, utter])
-                    buf.clear()
-                    last_partial_text = ""
-                    last_partial_t = now()
+            # hard limit per-utterance; force finalization immediately
+            if speaking and utter_start_t and (now() - utter_start_t) >= MAX_UTTER_SEC:
+                print(f"[ForceFinal] {MAX_UTTER_SEC}s reached — forcing final")
+                await _finalize_current_utter("timeout")
+                utter_start_t = None
 
             await asyncio.sleep(0)
 
@@ -856,11 +838,6 @@ async def handle_audio_ws(websocket: WebSocket):
         try:
             leftover = rolling.flush().strip()
             if leftover:
-                if campaign_id:
-                    print(f"[CharUpsert] posting DISCONNECT FLUSH ({len(leftover)} chars) campaign={campaign_id}")
-                    asyncio.create_task(_post_characters_chunk_local(campaign_id, leftover))
-                else:
-                    print("[CharUpsert] disconnect flush skipped: campaign_id not set")
                 seg = leftover
                 task = asyncio.create_task(_background_summary_task(send_queue, seg))
                 bg_tasks.add(task)

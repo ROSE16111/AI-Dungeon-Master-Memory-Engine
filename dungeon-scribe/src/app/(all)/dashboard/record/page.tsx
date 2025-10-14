@@ -1310,25 +1310,26 @@ function escapeHtml(s: string) {
 
 export default function RecordPage() {
   useEffect(() => {
-  const sess = (window as any).__asrSession;
-  if (sess?.ws instanceof WebSocket) {
-    console.log("[ASR] Rebinding handlers to existing WS session");
-    bindWsHandlers(sess.ws);
-    setIsRecording(sess.ws.readyState === WebSocket.OPEN);
+  (async () => {
+    const sess = (window as any).__asrSession;
+    if (!sess) return;
 
-    // NEW: re-send campaignId after rebind (no 'open' event here)
-    (async () => {
-      try {
-        const res = await fetch("/api/current-campaign");
-        const { id } = await res.json();
-        if (id) {
-          sess.ws.send(JSON.stringify({ type: "set_campaign", campaignId: id }));
-          console.log("[ASR] re-sent set_campaign on mount:", id);
-        }
-      } catch {}
-    })();
-  }
+    // If the old socket died while we were away, recreate it
+    const ws = await ensureOpenSocket(sess);
+    bindWsHandlers(ws);
+    setIsRecording(ws.readyState === WebSocket.OPEN);
+
+    // Re-send campaign on (re)bind
+    try {
+      const id = await getCampaignId();
+      if (id && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "set_campaign", campaignId: id }));
+        console.log("[ASR] set_campaign on mount:", id);
+      }
+    } catch {}
+  })();
 }, []);
+
 
   useLockBodyScroll();
   // const { transcript, setTranscript } = useTranscript();
@@ -1605,6 +1606,48 @@ export default function RecordPage() {
     };
   }
 
+  async function getCampaignId(): Promise<string | null> {
+    try {
+      const res = await fetch("/api/current-campaign", { method: "GET" });
+      const { id } = await res.json();
+      return id || null;
+    } catch {
+      return null;
+    }
+  }
+
+  function openWsWithCampaign(baseUrl: string, campaignId: string | null) {
+    return new WebSocket(
+      campaignId ? `${baseUrl}?campaignId=${encodeURIComponent(campaignId)}` : baseUrl
+    );
+  }
+
+  /** (Re)create a socket, bind handlers, and send campaign context when ready. */
+  async function createAndBindSocket(): Promise<WebSocket> {
+    const base = wsURL();
+    const campaignId = await getCampaignId();
+    const ws = openWsWithCampaign(base, campaignId);
+    bindWsHandlers(ws);
+    ws.addEventListener("open", () => {
+      if (campaignId) {
+        try {
+          ws.send(JSON.stringify({ type: "set_campaign", campaignId }));
+        } catch {}
+      }
+    });
+    return ws;
+  }
+
+  /** Ensure we have an OPEN socket; recreate & update __asrSession if needed. */
+  async function ensureOpenSocket(sess: any): Promise<WebSocket> {
+    const cur: WebSocket | undefined = sess?.ws;
+    if (cur && cur.readyState === WebSocket.OPEN) return cur;
+    const ws = await createAndBindSocket();
+    if (sess) sess.ws = ws;
+    return ws;
+  }
+
+
   // START recording
   const startRecording = async () => {
     // Do NOT clear transcript/summary here — keep previous speech-to-text content.
@@ -1615,37 +1658,37 @@ export default function RecordPage() {
     const existing = (window as any).__asrSession || null;
     if (existing && (existing as any).paused) {
       try {
-        const ws = existing.ws;
-        const node = existing.node;
-        // Re-bind WS handlers to resume receiving results
-        if (ws instanceof WebSocket) bindWsHandlers(ws);
-        try {
-          const res = await fetch("/api/current-campaign", { method: "GET" });
-          const { id: resumedCampaignId } = await res.json();
-          if (resumedCampaignId) {
-            ws.send(JSON.stringify({ type: "set_campaign", campaignId: resumedCampaignId }));
-            console.log("[ASR] re-sent set_campaign on resume:", resumedCampaignId);
+          const ws = existing.ws;
+          const node = existing.node;
+          // Re-bind WS handlers to resume receiving results
+          if (ws instanceof WebSocket) bindWsHandlers(ws);
+          try {
+            const res = await fetch("/api/current-campaign", { method: "GET" });
+            const { id: resumedCampaignId } = await res.json();
+            if (resumedCampaignId) {
+              ws.send(JSON.stringify({ type: "set_campaign", campaignId: resumedCampaignId }));
+              console.log("[ASR] re-sent set_campaign on resume:", resumedCampaignId);
+            }
+          } catch {}
+          // Re-attach worklet send handler so audio resumes being sent
+          if (node && node.port) {
+            node.port.onmessage = (ev: any) => {
+              const ab = ev.data as ArrayBuffer;
+              try {
+                if (ws && ws.readyState === WebSocket.OPEN) ws.send(ab);
+              } catch {}
+            };
+            node.port.onmessageerror = (e: any) =>
+              console.warn("[ASR] worklet port message error", e);
           }
-        } catch {}
-        // Re-attach worklet send handler so audio resumes being sent
-        if (node && node.port) {
-          node.port.onmessage = (ev: any) => {
-            const ab = ev.data as ArrayBuffer;
-            try {
-              if (ws && ws.readyState === WebSocket.OPEN) ws.send(ab);
-            } catch {}
-          };
-          node.port.onmessageerror = (e: any) =>
-            console.warn("[ASR] worklet port message error", e);
+          (existing as any).paused = false;
+          setIsRecording(true);
+          console.log("[ASR] resumed paused session");
+          return;
+        } catch (e) {
+          console.warn("Failed to resume paused session, starting fresh", e);
         }
-        (existing as any).paused = false;
-        setIsRecording(true);
-        console.log("[ASR] resumed paused session");
-        return;
-      } catch (e) {
-        console.warn("Failed to resume paused session, starting fresh", e);
       }
-    }
 
     try {
       // ask for mic
