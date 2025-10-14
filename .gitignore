@@ -92,3 +92,8 @@ env/
 .env/
 
 dungeon-scribe/public/uploads/
+
+# Chroma local DB
+chroma_db/
+*.sqlite3
+*.bin
