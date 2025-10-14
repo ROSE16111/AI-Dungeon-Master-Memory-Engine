@@ -311,8 +311,22 @@ export default function DashboardPage() {
       try {
         const res = await fetch("/api/current-campaign", { cache: "no-store" });
         if (!res.ok) throw new Error("failed");
-        const data = await res.json(); // { id, title } | { id: null, title: null }
-        setCampaignTitle(data?.title ?? null);
+        const data = await res.json();
+
+        /**
+         * 兼容三种返回：
+         * 1) { ok: true, item: { id, name } }
+         * 2) { id, title }
+         * 3) { ok: true, item: { id, title } }
+         */
+        const title =
+          data?.item?.name ??
+          data?.item?.title ??
+          data?.title ??
+          null;
+
+        setCampaignTitle(title);
+
 
         // 如果你想“没选就回登录”，解开下面这行：
         // if (!data?.id) router.push("/login");
