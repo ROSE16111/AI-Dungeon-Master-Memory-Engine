@@ -496,7 +496,7 @@ export default function ResourcesPage() {
       // 1️⃣ 前端立即移除
       setItems((prev) => prev.filter((x) => x.id !== item.id));
       // 2️⃣ 通知后端删除
-      fetch(`/api/resources?id=${item.id}`, { method: "DELETE" })
+      fetch(`/api/resources/${encodeURIComponent(item.id)}`, { method: "DELETE" })
         .then((res) => {
           if (!res.ok) throw new Error("Failed to delete resource");
         })
