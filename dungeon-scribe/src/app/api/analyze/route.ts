@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { SummaryType } from "@prisma/client";
-import { summarizeDnDSession } from "@/lib/llm"; // adjust path if different
+import { summarizeDnDSession, extractCharactersFromSession } from "@/lib/llm"; 
 
 export const runtime = "nodejs";
 
@@ -53,7 +53,6 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Empty text" }, { status: 400 });
     }
 
-
     // Prefer explicit campaignId if provided (client may pass it), else use title lookup/create
     let campaign = null;
     if (body.campaignId) {
@@ -84,6 +83,11 @@ export async function POST(req: Request) {
 
     // Generate summary bullets using the LLM
     const summaryBullets = (await summarizeDnDSession(text)).trim();
+
+    let characters: Awaited<ReturnType<typeof extractCharactersFromSession>> = [];
+    try {
+      characters = await extractCharactersFromSession(text);
+    } catch { /* tolerate LLM hiccups */ }
 
     // Fallback summary if LLM produced nothing
     const content =
@@ -123,6 +127,30 @@ export async function POST(req: Request) {
       });
     }
 
+    const createdCharacterSummaries = [];
+    for (const card of characters) {
+      try {
+        const contentLines: string[] = [];
+        if (card.role) contentLines.push(`• Role: ${card.role}`);
+        if (card.affiliation) contentLines.push(`• Affiliation: ${card.affiliation}`);
+        if (card.traits?.length) contentLines.push(`• Traits: ${card.traits.join(", ")}`);
+        if (card.goals?.length) contentLines.push(`• Goals: ${card.goals.join("; ")}`);
+        if (card.lastLocation) contentLines.push(`• Last location: ${card.lastLocation}`);
+        if (card.status) contentLines.push(`• Status: ${card.status}`);
+        if (card.notes) contentLines.push(`• Notes: ${card.notes}`);
+
+        const row = await prisma.summary.create({
+          data: {
+            type: SummaryType.character,
+            roleName: card.name,         // store name in roleName for quick filtering
+            content: contentLines.join("\n") || `• ${card.name}`,
+            campaignId: campaign.id,
+          },
+        });
+        createdCharacterSummaries.push({ id: row.id, name: card.name });
+      } catch { /* continue */ }
+}
+
     // Update campaign updateDate again (in case only summary is updated)
     await prisma.campaign.update({
       where: { id: campaign.id },
@@ -136,7 +164,9 @@ export async function POST(req: Request) {
       summaryId: summary.id,
       title: campaignTitle,
       source: body.source || "live",
-      summary: content,
+      summary:   summaryBullets,
+      characters,                         // ← array of structured cards back to client
+      characterSummaryIds: createdCharacterSummaries,
     });
   } catch (err: any) {
     // Log and return generic error on failure
