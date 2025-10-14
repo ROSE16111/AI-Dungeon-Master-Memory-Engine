@@ -4,7 +4,7 @@
 
 import MaskedMap from "@/components/MaskedMap";
 import { headers } from "next/headers";
-
+import Link from "next/link";
 export const dynamic = "force-dynamic";
 
 async function getMapMeta(id: string) {
@@ -45,7 +45,27 @@ export default async function MapViewPage({ params: { id } }: { params: { id: st
 
   return (
     <main className="p-4 space-y-3">
-      <div className="text-2xl font-semibold text-white">{meta.name}</div>
+       {/* 头部：左 Back / 中居中标题 / 右占位（保证真正居中） */}
+      <header className="mb-2">
+        <div className="grid grid-cols-[auto_1fr_auto] items-center gap-3">
+          {/* 左侧 Back（去掉 absolute） */}
+          <Link
+            href="/resources"                    // 按你的资源页真实路径
+            aria-label="Back to resources"
+            className="px-3 py-2 rounded-md bg-black/60 hover:bg-black/80 text-white inline-flex items-center"
+          >
+            ← Back
+          </Link>
+
+          {/* 中间标题：居中显示 */}
+          <h1 className="text-2xl font-semibold text-white text-center truncate">
+            {meta.name}
+          </h1>
+
+          {/* 右侧占位：让标题真正居中。宽度 ≈ Back 按钮的视觉宽度 */}
+          <div className="w-[72px]" aria-hidden />
+        </div>
+      </header>
       <div className="rounded-xl shadow border overflow-auto bg-black/30 p-2">
         <MaskedMap
           resourceId={id} 
