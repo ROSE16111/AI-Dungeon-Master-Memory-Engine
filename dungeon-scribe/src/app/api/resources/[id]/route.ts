@@ -3,7 +3,11 @@ import { NextResponse } from "next/server";
 import { PrismaClient, ResourceCategory } from "@prisma/client";
 import { cookies } from "next/headers";
 
+import path from "path";
+import { unlink } from "fs/promises";
 const prisma = new PrismaClient();
+
+export const runtime = "nodejs";
 
 async function getCurrentCampaignId(): Promise<string | null> {
   const jar = await cookies();
@@ -48,7 +52,7 @@ export async function GET(
   }
 }
 
-/** DELETE /api/resources/:id  删除单条资源（受当前战役限制） */
+/** DELETE /api/resources/:id —— 删除单条资源（受当前战役限制） */
 export async function DELETE(
   _req: Request,
   { params }: { params: { id: string } }
@@ -56,23 +60,46 @@ export async function DELETE(
   try {
     const campaignId = await getCurrentCampaignId();
     if (!campaignId) {
-      return NextResponse.json({ ok: false, error: "no current campaign" }, { status: 401 });
+      return NextResponse.json(
+        { ok: false, error: "no current campaign" },
+        { status: 401 }
+      );
     }
 
-    // 先检查是否属于当前战役
+    // 1) 先校验：该资源属于当前战役；同时把 fileUrl 取出来用于删除文件
     const exist = await prisma.resource.findFirst({
       where: { id: params.id, campaignId },
-      select: { id: true },
+      select: { id: true, fileUrl: true },
     });
+
     if (!exist) {
-      return NextResponse.json({ ok: false, error: "not found" }, { status: 404 });
+      return NextResponse.json(
+        { ok: false, error: "not found" },
+        { status: 404 }
+      );
     }
 
+    // 2) 尝试删除 public/uploads 下的文件（如果是我们自己存的）
+    //    - fileUrl 一般类似 "/uploads/xxx.png"
+    //    - 只删除指向 /uploads/ 的本地文件，防止误删
+    const fileUrl = exist.fileUrl || "";
+    if (fileUrl && /^\/uploads\//.test(fileUrl)) {
+      const rel = fileUrl.replace(/^\//, ""); // 去掉开头的 /
+      const abs = path.join(process.cwd(), "public", rel);
+      // 删除失败不影响整体：忽略错误
+      await unlink(abs).catch(() => {});
+    }
+
+    // 3) 删除数据库记录
     await prisma.resource.delete({ where: { id: params.id } });
+
     return NextResponse.json({ ok: true }, { status: 200 });
   } catch (e: any) {
     console.error("RESOURCES_[ID]_DELETE_ERROR", e);
-    return NextResponse.json({ ok: false, error: e?.message ?? "delete failed" }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: e?.message ?? "delete failed" },
+      { status: 500 }
+    );
   }
 }
 
