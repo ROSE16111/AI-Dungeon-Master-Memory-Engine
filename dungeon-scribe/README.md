@@ -384,6 +384,28 @@ git commit -m "Ensure prisma db files are ignored" # 如果有改动
 
 git push
 
-```
 
-```
+# MaskMap
+<div style={{width:display.w, height:display.h}}>
+  [最底层]  <canvas ref={baseRef}>         —— 底图（等比缩放后的地图像素）
+  [中间层]  <div style={gridStyle}>         —— 网格(用CSS渐变画线，便宜又清晰)
+  [上面层]  <canvas ref={fogRef}>          —— 雾层(整块黑 + 用“挖洞”显示光照)
+  [悬浮层]  <Hud/>                          —— HUD 控制面板（右下角，可调节参数）
+</div>
+底图：把图片绘制进 baseRef canvas。
+
+网格：不占用 canvas，直接用 background-image: linear-gradient(...) 画直线，性能与分辨率都稳定。
+
+雾层：整块黑底（带透明度），然后把光照区域“挖掉”，让底图透出来。// 通过 destination-out“挖掉”光照区域（内圈硬边 + 外圈软边径向渐变）
+g.globalCompositeOperation = 'destination-out';
+
+HUD：pointer-events: none 外壳 + “内容区 pointer-events: auto”，不挡住地图其他区域的鼠标/键盘事件
+加了一个 outerRef（容器 div），用 ResizeObserver 监听容器宽度；
+
+根据原图尺寸 dims 和容器宽度计算 display = { w, h, scale }；
+
+两个 canvas 的 像素宽高 都设置为 display.w / display.h，确保图像与雾层完全一致大小；
+
+网格线 backgroundSize 和计算光照时的 cellW/cellH 都基于 显示尺寸，不会因缩放错位。
+
+这样做的意义：图片过大时，按容器宽度等比缩小，避免初次进来就只能看到局部。用户在容器内滚动/放大策略可以再按需求扩展。

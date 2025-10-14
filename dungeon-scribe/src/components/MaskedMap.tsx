@@ -49,12 +49,16 @@ export default function MaskedMap({
     radiusTiles: Math.max(1, initialLight.radiusTiles),
     soft: initialLight.soft ?? 0.5,
   });
-  //HUD state
+
+  // HUD state
   const [hudOpen, setHudOpen] = useState(true);   // 是否展开
   const [hudAlpha, setHudAlpha] = useState(0.5);  // 背景不透明度 0.2 ~ 0.9
 
+  // 保存状态（用于显示 Saving… / Saved ✓）
+  const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState<number | null>(null); // 用于显示“Saved ✓”
 
-  // ✅ 新增：外层容器，用来测量可用宽度
+  // ✅ 外层容器，用来测量可用宽度（等比缩放依据）
   const outerRef = useRef<HTMLDivElement | null>(null);
   const [containerW, setContainerW] = useState<number>(0);
 
@@ -76,26 +80,57 @@ export default function MaskedMap({
     return () => ro.disconnect();
   }, []);
 
-    // ✅ 计算显示尺寸：按容器最大宽度等比缩小（不放大）
+  // ✅ 计算显示尺寸：按容器最大宽度等比缩放（不放大）
   const display = React.useMemo(() => {
     if (!dims) return { w: 0, h: 0, scale: 1 };
     const maxW = containerW > 0 ? containerW : dims.w;
-    const scale = Math.min(maxW / dims.w); //放大和缩小
+    const scale = Math.min(maxW / dims.w);
     const w = Math.round(dims.w * scale);
     const h = Math.round(dims.h * scale);
     return { w, h, scale };
   }, [dims, containerW]);
 
   // 防抖定时器（减少 PATCH 次数）
+  // 在三类地方会调用 PATCH: 键盘移动光源; HUD 改半径; HUD 改网格
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const debounce = (fn: () => void, wait = 400) => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(fn, wait);
   };
 
-
   const clamp = (v: number, min: number, max: number) =>
     Math.max(min, Math.min(max, v));
+
+  /* -------------------------- 后端保存封装（统一显示状态） -------------------------- */
+  async function patchResource(patch: Record<string, number>) {
+    try {
+      setSaving(true);
+      const res = await fetch(`/api/resources/${encodeURIComponent(resourceId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+        cache: "no-store",
+      });
+      if (!res.ok) {
+        console.error("PATCH failed", await res.text());
+        return false;
+      }
+      setSavedAt(Date.now()); // 用于显示“Saved ✓”
+      return true;
+    } catch (e) {
+      console.error("PATCH error", e);
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // “Saved ✓” 2 秒后淡出
+  useEffect(() => {
+    if (!savedAt) return;
+    const t = setTimeout(() => setSavedAt(null), 2000);
+    return () => clearTimeout(t);
+  }, [savedAt]);
 
   /* -------------------------- 加载图片（Load Image） -------------------------- */
   useEffect(() => {
@@ -117,7 +152,7 @@ export default function MaskedMap({
 
     const g = c.getContext("2d")!;
     g.clearRect(0, 0, c.width, c.height);
-      // 将原图缩放绘制到显示尺寸
+    // 将原图缩放绘制到显示尺寸
     g.imageSmoothingEnabled = true;
     g.drawImage(img, 0, 0, c.width, c.height);
   }, [img, dims, display.w, display.h]);
@@ -125,27 +160,27 @@ export default function MaskedMap({
   /* --------------- 绘制雾层 + 光洞（Draw Fog + Punch Holes） --------------- */
   const drawFog = useCallback(() => {
     if (!dims || !fogRef.current) return;
-      const c = fogRef.current;
-      const w = display.w;
-      const h = display.h;
-      if (!w || !h) return;
-      c.width = w;
-      c.height = h;
-
+    const c = fogRef.current;
+    const w = display.w;
+    const h = display.h;
+    if (!w || !h) return;
+    c.width = w;
+    c.height = h;
 
     const g = c.getContext("2d")!;
     // 1) 盖一层黑雾（黑色+可配置透明度）
     g.clearRect(0, 0, c.width, c.height);
     g.globalCompositeOperation = "source-over"; // 正常绘制
+    // 一旦改了 c.width/height，上下文会被重置，所有状态需重新设定
     g.clearRect(0, 0, w, h);
     g.fillStyle = `rgba(0,0,0,${fogOpacity})`;
-    g.fillRect(-2, -2, w + 4, h + 4); // ← 出血
+    g.fillRect(-2, -2, w + 4, h + 4); // ← 出血，避免边缘缝隙
 
     // 2) 网格(px)计算 —— 注意这里用可编辑的 gridX/gridY
     const cellW = c.width / gridX;
     const cellH = c.height / gridY;
-    const cx = (light.j + 0.5) * cellW;                  // 列 X（j）
-    const cy = (light.i + 0.5) * cellH;                  // 行 Y（i）
+    const cx = (light.j + 0.5) * cellW; // 列 X（j）
+    const cy = (light.i + 0.5) * cellH; // 行 Y（i）
     const r  = light.radiusTiles * Math.min(cellW, cellH);
     const soft = (light.soft ?? 0.5) * r;
 
@@ -155,7 +190,7 @@ export default function MaskedMap({
     // 3.1 内圈硬边
     g.beginPath();
     g.arc(cx, cy, Math.max(0, r - soft), 0, Math.PI * 2);
-    g.fillStyle = "rgba(0,0,0,1)"; // 颜色不重要，dest-out 只看alpha
+    g.fillStyle = "rgba(0,0,0,1)"; // 颜色不重要，dest-out 只看 alpha
     g.fill();
 
     // 3.2 外圈软边（径向渐变）
@@ -166,7 +201,7 @@ export default function MaskedMap({
     g.arc(cx, cy, r, 0, Math.PI * 2);
     g.fillStyle = grad;
     g.fill();
-  }, [dims, gridX, gridY, light, fogOpacity, display.w, display.h,]);
+  }, [dims, gridX, gridY, light, fogOpacity, display.w, display.h]);
 
   // 初次与依赖变化时重绘
   useEffect(() => {
@@ -200,13 +235,9 @@ export default function MaskedMap({
             i: clamp(L.i + di, 0, gridY - 1),
             j: clamp(L.j + dj, 0, gridX - 1),
           };
-          // 自动保存光源位置（防抖）
+          // 所有会改变配置的交互（移动光源、改半径、改网格）都通过一个 防抖函数 触发 PATCH
           debounce(() => {
-            fetch(`/api/resources/${encodeURIComponent(resourceId)}`, {
-              method: "PATCH",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ lightI: next.i, lightJ: next.j }),
-            }).catch(() => {});
+            patchResource({ lightI: next.i, lightJ: next.j }); // ✅ 统一封装
           });
           return next;
         });
@@ -214,7 +245,7 @@ export default function MaskedMap({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [gridX, gridY, resourceId]);
+  }, [gridX, gridY]); // resourceId 不变可不加
 
   /* ----------------------------- 网格可视层 ------------------------------ */
   const gridStyle: React.CSSProperties = display.w
@@ -226,188 +257,187 @@ export default function MaskedMap({
       }
     : {};
 
- /* ------------------------------ HUD 控制面板 ------------------------------ */
-const Hud = () => (
-  <>
-    {/* HUD 外壳：不拦截事件 */}
-    <div className="absolute bottom-3 right-3 z-[30] pointer-events-none select-none">
-      {/* 折叠按钮（小圆点），不挡其他区域 */}
-      {!hudOpen && (
-        <button
-          onClick={() => setHudOpen(true)}
-          className="pointer-events-auto h-8 w-8 rounded-full bg-black/50 text-white grid place-items-center shadow"
-          title="Open Inspector (H)"
-          aria-label="Open Inspector"
-        >
-          ☰
-        </button>
-      )}
+  /* ------------------------------ HUD 控制面板 ------------------------------ */
+  const Hud = () => (
+    <>
+      {/* HUD 外壳：不拦截事件 */}
+      <div className="absolute bottom-3 right-3 z-[30] pointer-events-none select-none">
+        {/* 折叠按钮（小圆点），不挡其他区域 */}
+        {!hudOpen && (
+          <button
+            onClick={() => setHudOpen(true)}
+            className="pointer-events-auto h-8 w-8 rounded-full bg-black/50 text-white grid place-items-center shadow"
+            title="Open Inspector (H)"
+            aria-label="Open Inspector"
+          >
+            ☰
+          </button>
+        )}
 
-      {hudOpen && (
-        // 只有内容区域接收事件，其余地方透传
-        <div
-          className="pointer-events-auto w-[320px] rounded-xl shadow-lg border backdrop-blur"
-          style={{
-            backgroundColor: `rgba(20, 22, 26, ${hudAlpha})`,
-            borderColor: "rgba(255,255,255,0.18)",
-          }}
-        >
-          {/* 顶部栏：标题 + 折叠 + 透明度 */}
-          <div className="flex items-center justify-between px-3 pt-2 pb-1 text-white">
-            <div className="text-sm/5 opacity-90">Inspector / 控制台</div>
-            <div className="flex items-center gap-2">
-              <input
-                type="range"
-                min={0.2}
-                max={0.9}
-                step={0.05}
-                value={hudAlpha}
-                onChange={(e) => setHudAlpha(Number(e.target.value))}
-                className="accent-white w-24"
-                title="Panel Opacity"
-              />
-              <button
-                onClick={() => setHudOpen(false)}
-                className="h-7 w-7 rounded-md bg-white/10 hover:bg-white/20 text-white"
-                title="Collapse (H)"
-                aria-label="Collapse"
-              >
-                –
-              </button>
+        {hudOpen && (
+          // 只有内容区域接收事件，其余地方透传
+          <div
+            className="pointer-events-auto w-[320px] rounded-xl shadow-lg border backdrop-blur"
+            style={{
+              backgroundColor: `rgba(20, 22, 26, ${hudAlpha})`, // 深灰而不是纯黑
+              borderColor: "rgba(255,255,255,0.18)",
+            }}
+          >
+            {/* 顶部栏：标题 + 折叠 + 透明度 + 保存状态 */}
+            <div className="flex items-center justify-between px-3 pt-2 pb-1 text-white relative">
+              <div className="text-sm/5 opacity-90">Inspector / 控制台</div>
+
+              {/* 保存状态角标 */}
+              <div className="absolute right-[56px] top-2 text-xs" aria-live="polite">
+                {saving ? (
+                  <span className="px-2 py-0.5 rounded bg-white/10 border border-white/20">
+                    Saving…
+                  </span>
+                ) : savedAt ? (
+                  <span
+                    className="px-2 py-0.5 rounded bg-emerald-500/80 text-black"
+                    key={savedAt}
+                  >
+                    Saved ✓
+                  </span>
+                ) : null}
+              </div>
+
+              <div className="flex items-center gap-2">
+                {/* 透明度滑块 */}
+                <input
+                  type="range"
+                  min={0.2}
+                  max={0.9}
+                  step={0.05}
+                  value={hudAlpha}
+                  onChange={(e) => setHudAlpha(Number(e.target.value))}
+                  className="accent-white w-24"
+                  title="Panel Opacity"
+                />
+                {/* 折叠按钮 */}
+                <button
+                  onClick={() => setHudOpen(false)}
+                  className="h-7 w-7 rounded-md bg-white/10 hover:bg-white/20 text-white"
+                  title="Collapse (H)"
+                  aria-label="Collapse"
+                >
+                  –
+                </button>
+              </div>
+            </div>
+
+            {/* 主体内容 */}
+            <div className="px-3 pb-3 text-white space-y-2">
+              {/* current (x,y) */}
+              <div className="flex items-center gap-2">
+                <span className="text-sm whitespace-nowrap">current:</span>
+                <label className="text-xs opacity-80">y</label>
+                <input
+                  type="number"
+                  className="w-16 rounded-md bg-white/10 border border-white/20 px-2 py-1 text-sm"
+                  value={light.i}
+                  min={0}
+                  max={Math.max(0, gridY - 1)}
+                  onChange={(e) => {
+                    const v = clamp(parseInt(e.target.value || "0", 10), 0, Math.max(0, gridY - 1));
+                    setLight((prev) => ({ ...prev, i: v }));
+                    debounce(() => {
+                      patchResource({ lightI: v }); // ✅
+                    });
+                  }}
+                />
+                <label className="text-xs opacity-80">x</label>
+                <input
+                  type="number"
+                  className="w-16 rounded-md bg-white/10 border border-white/20 px-2 py-1 text-sm"
+                  value={light.j}
+                  min={0}
+                  max={Math.max(0, gridX - 1)}
+                  onChange={(e) => {
+                    const v = clamp(parseInt(e.target.value || "0", 10), 0, Math.max(0, gridX - 1));
+                    setLight((prev) => ({ ...prev, j: v }));
+                    debounce(() => {
+                      patchResource({ lightJ: v }); // ✅
+                    });
+                  }}
+                />
+              </div>
+
+              {/* radius */}
+              <div className="flex items-center gap-2">
+                <span className="text-sm whitespace-nowrap">radius:</span>
+                <input
+                  type="number"
+                  className="w-20 rounded-md bg-white/10 border border-white/20 px-2 py-1 text-sm"
+                  value={light.radiusTiles}
+                  min={1}
+                  max={200}
+                  onChange={(e) => {
+                    const v = clamp(parseInt(e.target.value || "1", 10), 1, 200);
+                    setLight((prev) => ({ ...prev, radiusTiles: v }));
+                    debounce(() => {
+                      patchResource({ lightRadius: v }); // ✅
+                    });
+                  }}
+                />
+              </div>
+
+              {/* grid */}
+              <div className="flex items-center gap-2">
+                <span className="text-sm whitespace-nowrap">grid:</span>
+                <label className="text-xs opacity-80">X</label>
+                <input
+                  type="number"
+                  className="w-16 rounded-md bg-white/10 border border-white/20 px-2 py-1 text-sm"
+                  value={gridX}
+                  min={1}
+                  max={200}
+                  onChange={(e) => {
+                    const v = clamp(parseInt(e.target.value || "1", 10), 1, 200);
+                    setGridX(v);
+                    setLight((prev) => ({ ...prev, j: clamp(prev.j, 0, v - 1) }));
+                    debounce(() => {
+                      patchResource({ gridCols: v }); // ✅
+                    });
+                  }}
+                />
+                <label className="text-xs opacity-80">Y</label>
+                <input
+                  type="number"
+                  className="w-16 rounded-md bg-white/10 border border-white/20 px-2 py-1 text-sm"
+                  value={gridY}
+                  min={1}
+                  max={200}
+                  onChange={(e) => {
+                    const v = clamp(parseInt(e.target.value || "1", 10), 1, 200);
+                    setGridY(v);
+                    setLight((prev) => ({ ...prev, i: clamp(prev.i, 0, v - 1) }));
+                    debounce(() => {
+                      patchResource({ gridRows: v }); // ✅
+                    });
+                  }}
+                />
+              </div>
+
+              <div className="text-xs opacity-80">
+                current: (<b>{light.j}</b>, <b>{light.i}</b>) · grid: <b>{gridX}</b>×<b>{gridY}</b> · radius: <b>{light.radiusTiles}</b>
+              </div>
             </div>
           </div>
-
-          {/* 主体内容 */}
-          <div className="px-3 pb-3 text-white space-y-2">
-            {/* current (x,y) */}
-            <div className="flex items-center gap-2">
-              <span className="text-sm whitespace-nowrap">current:</span>
-              <label className="text-xs opacity-80">y</label>
-              <input
-                type="number"
-                className="w-16 rounded-md bg-white/10 border border-white/20 px-2 py-1 text-sm"
-                value={light.i}
-                min={0}
-                max={Math.max(0, gridY - 1)}
-                onChange={(e) => {
-                  const v = clamp(parseInt(e.target.value || "0", 10), 0, Math.max(0, gridY - 1));
-                  setLight((prev) => ({ ...prev, i: v }));
-                  debounce(() => {
-                    fetch(`/api/resources/${encodeURIComponent(resourceId)}`, {
-                      method: "PATCH",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ lightI: v }),
-                    }).catch(() => {});
-                  });
-                }}
-              />
-              <label className="text-xs opacity-80">x</label>
-              <input
-                type="number"
-                className="w-16 rounded-md bg白/10 border border-white/20 px-2 py-1 text-sm"
-                value={light.j}
-                min={0}
-                max={Math.max(0, gridX - 1)}
-                onChange={(e) => {
-                  const v = clamp(parseInt(e.target.value || "0", 10), 0, Math.max(0, gridX - 1));
-                  setLight((prev) => ({ ...prev, j: v }));
-                  debounce(() => {
-                    fetch(`/api/resources/${encodeURIComponent(resourceId)}`, {
-                      method: "PATCH",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ lightJ: v }),
-                    }).catch(() => {});
-                  });
-                }}
-              />
-            </div>
-
-            {/* radius */}
-            <div className="flex items-center gap-2">
-              <span className="text-sm whitespace-nowrap">radius:</span>
-              <input
-                type="number"
-                className="w-20 rounded-md bg-white/10 border border-white/20 px-2 py-1 text-sm"
-                value={light.radiusTiles}
-                min={1}
-                max={200}
-                onChange={(e) => {
-                  const v = clamp(parseInt(e.target.value || "1", 10), 1, 200);
-                  setLight((prev) => ({ ...prev, radiusTiles: v }));
-                  debounce(() => {
-                    fetch(`/api/resources/${encodeURIComponent(resourceId)}`, {
-                      method: "PATCH",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ lightRadius: v }),
-                    }).catch(() => {});
-                  });
-                }}
-              />
-            </div>
-
-            {/* grid */}
-            <div className="flex items-center gap-2">
-              <span className="text-sm whitespace-nowrap">grid:</span>
-              <label className="text-xs opacity-80">X</label>
-              <input
-                type="number"
-                className="w-16 rounded-md bg-white/10 border border-white/20 px-2 py-1 text-sm"
-                value={gridX}
-                min={1}
-                max={200}
-                onChange={(e) => {
-                  const v = clamp(parseInt(e.target.value || "1", 10), 1, 200);
-                  setGridX(v);
-                  setLight((prev) => ({ ...prev, j: clamp(prev.j, 0, v - 1) }));
-                  debounce(() => {
-                    fetch(`/api/resources/${encodeURIComponent(resourceId)}`, {
-                      method: "PATCH",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ gridCols: v }),
-                    }).catch(() => {});
-                  });
-                }}
-              />
-              <label className="text-xs opacity-80">Y</label>
-              <input
-                type="number"
-                className="w-16 rounded-md bg-white/10 border border-white/20 px-2 py-1 text-sm"
-                value={gridY}
-                min={1}
-                max={200}
-                onChange={(e) => {
-                  const v = clamp(parseInt(e.target.value || "1", 10), 1, 200);
-                  setGridY(v);
-                  setLight((prev) => ({ ...prev, i: clamp(prev.i, 0, v - 1) }));
-                  debounce(() => {
-                    fetch(`/api/resources/${encodeURIComponent(resourceId)}`, {
-                      method: "PATCH",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ gridRows: v }),
-                    }).catch(() => {});
-                  });
-                }}
-              />
-            </div>
-
-            <div className="text-xs opacity-80">
-              current: (<b>{light.j}</b>, <b>{light.i}</b>) · grid: <b>{gridX}</b>×<b>{gridY}</b> · radius: <b>{light.radiusTiles}</b>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  </>
-);
-
+        )}
+      </div>
+    </>
+  );
 
   /* ---------------------------------- 渲染 ---------------------------------- */
   return (
     <div ref={outerRef} className="relative w-full h-full overflow-auto">   {/* ✅ 监听这个宽度 */}
+        {/* ✅ 显示尺寸 */}
       <div
         className="relative inline-block"
-        style={{ width: display.w, height: display.h }}                    
-      >                                                                        {/* ✅ 显示尺寸 */}
+        style={{ width: display.w, height: display.h }}                   
+      >
         {/* 底图画布 */}
         <canvas ref={baseRef} style={{ display: "block" }} />
 
@@ -426,5 +456,4 @@ const Hud = () => (
       </div>
     </div>
   );
-
 }
