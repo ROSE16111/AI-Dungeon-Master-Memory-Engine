@@ -349,23 +349,16 @@ function CardOnPaper({ campaignId }: { campaignId?: string | null }) {
   useEffect(() => {
     // If a campaignId is provided, fetch campaigns and extract the latest session summary for that campaign
     if (!campaignId) return;
-<<<<<<< HEAD
-=======
-
->>>>>>> 988fdc3 (update summary edit part history page)
     fetch(`/api/data`)
       .then((res) => res.json())
       .then((data) => {
         const campaigns = data.campaigns || [];
         const camp = campaigns.find((c: any) => c.id === campaignId);
         if (camp) {
-<<<<<<< HEAD
+
           // Wire visible title and update date to campaign data
           if (camp.title) setTitle(camp.title);
           if (camp.updateDate) setDate(new Date(camp.updateDate).toLocaleString());
-
-=======
->>>>>>> 988fdc3 (update summary edit part history page)
           // Check if History asked us to open a specific summary id
           let handled = false;
           try {
@@ -564,11 +557,10 @@ function CardOnPaper({ campaignId }: { campaignId?: string | null }) {
                             const json = parsed || {};
                             if (json?.summary?.content) setSummary(json.summary.content);
                             if (json?.summary?.id) setSummaryId(json.summary.id);
-<<<<<<< HEAD
+
                             // If server returned campaign updateDate, refresh displayed date
                             if (json?.campaign?.updateDate) setDate(new Date(json.campaign.updateDate).toLocaleString());
-=======
->>>>>>> 988fdc3 (update summary edit part history page)
+
                             setEditable(false);
                           } catch (e: any) {
                             console.error("Failed to save summary:", e);
