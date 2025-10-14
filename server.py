@@ -63,11 +63,9 @@ SUMMARY_FORCE_FLUSH_AFTER_FINAL = os.getenv("SUMMARY_FORCE_FLUSH_AFTER_FINAL", "
 SUMMARY_DRAIN_TIMEOUT = float(os.getenv("SUMMARY_DRAIN_TIMEOUT", "5.0"))
 SESSION_IDLE_SEC = float(os.getenv("SESSION_IDLE_SEC", "8.0"))
 
-# [CHAR-SUMMARY OFF] Character upsert throttling vars (unused now)
 # last_upsert_t = 0.0
 # UPSERT_COOLDOWN = float(os.getenv("UPSERT_COOLDOWN", "10.0"))
 
-# [CHAR-SUMMARY OFF] Character upsert posting sizes/timeouts (unused now)
 # MAX_UPSERT_CHARS = int(os.getenv("MAX_UPSERT_CHARS", "800"))
 # CHAR_UPSERT_CONNECT_TIMEOUT = float(os.getenv("CHAR_UPSERT_CONNECT_TIMEOUT", "2"))
 # CHAR_UPSERT_READ_TIMEOUT = float(os.getenv("CHAR_UPSERT_READ_TIMEOUT", "180"))
@@ -634,7 +632,6 @@ async def handle_audio_ws(websocket: WebSocket):
         cooldown_sec=0.5
     )
 
-    # [CHAR-SUMMARY OFF] Character upsert URL (unused now)
     # CHAR_UPSERT_URL = os.getenv("CHAR_UPSERT_URL", "http://127.0.0.1:3000/api/characters/upsert")
     campaign_id: Optional[str] = None
 
@@ -655,12 +652,9 @@ async def handle_audio_ws(websocket: WebSocket):
     except Exception:
         pass
 
-    # [CHAR-SUMMARY OFF] Entire character upsert function disabled
     # async def _post_characters_chunk_local(campaign_id_: Optional[str], text: str):
-    #     ...
 
     async def _flush_and_finish(reason: str):
-        # [CHAR-SUMMARY OFF] last_upsert_t used only for char upsert throttle
         # global last_upsert_t
         leftover = rolling.flush().strip()
         if leftover:
@@ -680,7 +674,6 @@ async def handle_audio_ws(websocket: WebSocket):
         except Exception:
             pass
 
-    # --- helper: finalize current utterance now (used by silence and timeout) ---
     async def _finalize_current_utter(reason: str = "silence"):
         nonlocal speaking, tail, buf, last_partial_text, last_partial_t
         try:
@@ -703,7 +696,7 @@ async def handle_audio_ws(websocket: WebSocket):
                 except Exception as e:
                     print(f"[Embed] failed to add live chunk: {e}")
 
-                # schedule summaries (NOT character summaries)
+                # schedule summaries 
                 segments = rolling.push(final_text)
                 if isinstance(segments, str):
                     segments = [segments] if segments else []
