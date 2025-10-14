@@ -18,8 +18,9 @@ async function getCurrentCampaignId(): Promise<string | null> {
 /** GET /api/resources/:id  读取单条资源（受当前战役限制） */
 export async function GET(
   _req: Request,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
+  const { id } = await params; 
   try {
     const campaignId = await getCurrentCampaignId();
     if (!campaignId) {
@@ -27,7 +28,7 @@ export async function GET(
     }
 
     const r = await prisma.resource.findFirst({
-      where: { id: params.id, campaignId },
+      where: { id, campaignId },
       select: {
         id: true,
         title: true,
@@ -55,8 +56,9 @@ export async function GET(
 /** DELETE /api/resources/:id —— 删除单条资源（受当前战役限制） */
 export async function DELETE(
   _req: Request,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
+  const { id } = await params;
   try {
     const campaignId = await getCurrentCampaignId();
     if (!campaignId) {
@@ -68,7 +70,7 @@ export async function DELETE(
 
     // 1) 先校验：该资源属于当前战役；同时把 fileUrl 取出来用于删除文件
     const exist = await prisma.resource.findFirst({
-      where: { id: params.id, campaignId },
+      where: { id, campaignId },
       select: { id: true, fileUrl: true },
     });
 
@@ -91,7 +93,7 @@ export async function DELETE(
     }
 
     // 3) 删除数据库记录
-    await prisma.resource.delete({ where: { id: params.id } });
+    await prisma.resource.delete({ where: { id } });
 
     return NextResponse.json({ ok: true }, { status: 200 });
   } catch (e: any) {
@@ -107,8 +109,9 @@ export async function DELETE(
  *  接收 JSON 部分更新：
  *  { gridCols?, gridRows?, lightI?, lightJ?, lightRadius? }
  */
-export async function PATCH(req: Request, { params }: { params: { id: string } }) {
+export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
+    const { id } = await params;
     const campaignId = await getCurrentCampaignId();
     if (!campaignId) {
       return NextResponse.json({ ok: false, error: "no current campaign" }, { status: 401 });
@@ -130,13 +133,13 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
     // 先确保这条资源属于当前战役
     const exist = await prisma.resource.findFirst({
-      where: { id: params.id, campaignId },
+      where: { id, campaignId },
       select: { id: true },
     });
     if (!exist) return NextResponse.json({ ok: false, error: "not found" }, { status: 404 });
 
     const updated = await prisma.resource.update({
-      where: { id: params.id },
+      where: { id },
       data,
     });
 
