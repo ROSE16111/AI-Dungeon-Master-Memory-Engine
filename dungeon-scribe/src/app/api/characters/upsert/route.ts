@@ -30,21 +30,80 @@ function mergeCard(existing: CharacterCard, incoming: CharacterCard): CharacterC
 }
 
 function cardToContent(c: CharacterCard): string {
-    const lines: string[] = [];
-    if (c.role) lines.push(`• Role: ${c.role}`);
-    if (c.affiliation) lines.push(`• Affiliation: ${c.affiliation}`);
-    if (c.traits?.length) lines.push(`• Traits: ${c.traits.join(", ")}`);
-    if (c.goals?.length) lines.push(`• Goals: ${c.goals.join("; ")}`);
-    if (c.lastLocation) lines.push(`• Last location: ${c.lastLocation}`);
-    if (c.status) lines.push(`• Status: ${c.status}`);
-    if (c.notes) lines.push(`• Notes: ${c.notes}`);
-    return lines.join("\n") || `• ${c.name}`;
-}
+    // Build "Title\nValue\n\n" blocks; skip empty fields
+    const blocks: string[] = [];
+
+    const pushBlock = (title: string, value: string | string[] | undefined) => {
+        if (!value) return;
+        const v = Array.isArray(value) ? value.join(", ") : String(value).trim();
+        if (!v) return;
+        blocks.push(`${title}\n${v}`);
+    };
+
+    pushBlock("Role", c.role);
+    pushBlock("Affiliation", c.affiliation);
+    pushBlock("Traits", c.traits);
+    pushBlock("Goals", c.goals?.join("; ")); // keep semicolons between goals
+    pushBlock("Last location", c.lastLocation);
+    pushBlock("Status", c.status);
+    pushBlock("Notes", c.notes);
+
+    // Fallback: at least emit the name if absolutely nothing else exists
+    if (blocks.length === 0) return c.name || "";
+
+    // Separate sections by a single blank line
+    return blocks.join("\n\n");
+    }
 
 function parseContentToCard(name: string, content: string | null | undefined): CharacterCard {
-    const get = (re: RegExp) => content?.match(re)?.[1]?.trim();
+    const text = (content ?? "").trim();
+
+    const blockRe =
+        /(Role|Affiliation|Traits|Goals|Last location|Status|Notes)\s*\n([\s\S]*?)(?:\n\s*\n|$)/gi;
+
+    const blocks: Record<string, string> = {};
+    let m: RegExpExecArray | null;
+    while ((m = blockRe.exec(text)) !== null) {
+        const key = m[1].toLowerCase();
+        const val = (m[2] || "").trim();
+        if (val) blocks[key] = val;
+    }
+
+    const fromBlocks: CharacterCard = {
+        name,
+        role: blocks["role"],
+        affiliation: blocks["affiliation"],
+        traits:
+        (blocks["traits"] || "")
+            .split(/\s*,\s*/)
+            .map((s) => s.trim())
+            .filter(Boolean) || [],
+        goals:
+        (blocks["goals"] || "")
+            .split(/\s*;\s*|\n+/)
+            .map((s) => s.trim())
+            .filter(Boolean) || [],
+        lastLocation: blocks["last location"],
+        status: blocks["status"],
+        notes: blocks["notes"],
+    };
+
+    const anyNew =
+        !!fromBlocks.role ||
+        !!fromBlocks.affiliation ||
+        ((fromBlocks.traits?.length ?? 0) > 0) ||
+        ((fromBlocks.goals?.length ?? 0) > 0) ||
+        !!fromBlocks.lastLocation ||
+        !!fromBlocks.status ||
+        !!fromBlocks.notes;
+
+    if (anyNew) return fromBlocks;
+
+    // Fallback parser (bullets) ...
+    const get = (re: RegExp) => text.match(re)?.[1]?.trim();
     const list = (re: RegExp, sep: RegExp) =>
         get(re)?.split(sep).map((s) => s.trim()).filter(Boolean) ?? [];
+
     return {
         name,
         role: get(/Role:\s*(.+)/i),

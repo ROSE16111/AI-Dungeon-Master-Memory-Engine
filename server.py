@@ -253,12 +253,19 @@ def summarize_with_ollama(text: str, model: str = OLLAMA_SUMMARY_MODEL) -> str:
 
     prompt = (
         "You are a STRICT extractor for tabletop role-playing game (TTRPG) session notes.\n"
+
+        "MODE: VERBATIM-ONLY RECAP\n"
+        "- Use ONLY facts explicitly present in the transcript.\n"
+        "- Never invent names, items, quests, places, mechanics, or outcomes.\n"
+        "- If something is unclear or missing, omit it.\n"
+
         "TASK:\n"
-        "1) Summarize ONLY in-game narrative and mechanics (characters, locations, actions, events, items, checks, combat, outcomes).\n"
-        "2) IGNORE all table chat / out-of-character (OOC) chatter: jokes, small talk, rules discussion, logistics, meta-commentary.\n"
+        "1) Summarize ONLY in-game narrative and mechanics (focus on the following if stated: plot beats, explicit NPC names/roles, locations actually visited, items gained/lost, important player decisions and their consequences, hooks/next steps that were said).\n"
+        "2) IGNORE all table chat / out-of-character chatter: jokes, small talk, rules discussion, logistics, meta-commentary.\n"
         "3) DO NOT invent names, places, items, or facts not present in the transcript.\n"
-        "4) If the chunk contains ONLY table chat or no game content, output exactly: SKIP and not the following output rules.\n"
-        "5) Output:\n"
+        "4) Do not add any storey telling colour to the summary"
+        "5) If the chunk contains ONLY table chat or no game content, output exactly: SKIP.\n"
+        "6) Output:\n"
         "   - First line: the title only (3 -5 words, no prefix).\n"
         "   - Next 2-5 sentences: strictly derived from the chunk.\n"
         "   - Nothing else.\n\n"

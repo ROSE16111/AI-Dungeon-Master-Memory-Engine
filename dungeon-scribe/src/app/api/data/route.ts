@@ -12,13 +12,14 @@ export async function GET(req: NextRequest) {
 
   try {
     // 获取特定Campaign的Roles
-    // GET /api/data?type=roles&campaignId=...
     if (type === "roles" && campaignId) {
       const campaign = await prisma.campaign.findUnique({
         where: { id: campaignId },
         include: {
           roles: true,
-          summaries: true, // get all summaries
+          summaries: {
+            where: { type: "character" },
+          },
         },
       });
 
@@ -26,27 +27,15 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
       }
 
-      const charSummaries = campaign.summaries.filter(
-        (s) => s.type === "character" && s.roleName
-      );
-
-      // Maps for easy lookup
-      const roleByName = new Map(campaign.roles.map((r) => [r.name, r]));
-      const summaryByName = new Map(
-        charSummaries.map((s) => [s.roleName as string, s])
-      );
-
-      const rolesWithSummaries = Array.from(summaryByName.keys()).map((name) => {
-        const role = roleByName.get(name);
-        const summary = summaryByName.get(name)!;
+      // 合并角色基本信息和角色总结
+      const rolesWithSummaries = campaign.roles.map((role) => {
+        const summary = campaign.summaries.find((s) => s.roleName === role.name);
         return {
-          id: role?.id ?? `summary:${summary.id}`,
-          name,
-          level: role?.level ?? null,
-          details: summary.content || "No detailed summary available yet.",
-          img: summary.imageBase64
-            ? `data:image/png;base64,${summary.imageBase64}`
-            : "/Griff.png",
+          id: role.id,
+          name: role.name,
+          level: role.level,
+          details: summary?.content || `Level ${role.level} character. No detailed summary available yet.`,
+          img: summary?.imageBase64 ? `data:image/png;base64,${summary.imageBase64}` : "/Griff.png",
         };
       });
 
