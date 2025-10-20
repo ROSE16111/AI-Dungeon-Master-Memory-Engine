@@ -1879,23 +1879,42 @@ export default function RecordPage() {
 
   // End Session: save AI summary to DB (update existing summary if present), cleanup and navigate
   const handleEndSession = async () => {
-    // Use stored campaign id and summary from transcript context
     try { await endStreamAndWait(); } catch {}
-    const campaignId = currentCampaignId || null;
-    const campaignTitle = (window?.localStorage?.getItem("currentCampaignTitle") || "Untitled Campaign").trim();
-    const summaryText = summary || "";
 
-    // Try to pick an existing summaryId from localStorage if set by History
-    const existingSummaryId = typeof window !== "undefined" ? window.localStorage.getItem("currentSummaryId") : null;
+    // Resolve campaignId robustly
+    let campaignId = currentCampaignId?.trim() || null;
+    if (!campaignId) {
+      try {
+        campaignId = (await getCampaignId()) || null;
+      } catch {}
+    }
+    if (!campaignId) {
+      try {
+        campaignId = window.localStorage.getItem("currentCampaignId") || null;
+      } catch {}
+    }
+
+    const campaignTitle =
+      (window?.localStorage?.getItem("currentCampaignTitle") || "Untitled Campaign").trim();
+    const summaryText = summary || "";
+    const existingSummaryId =
+      typeof window !== "undefined" ? window.localStorage.getItem("currentSummaryId") : null;
+
+    if (!campaignId) {
+      console.error("[EndSession] Missing campaignId; not saving/navigating.");
+      alert("No campaign selected. Please select a campaign first.");
+      return;
+    }
 
     try {
+      // Save session summary
       const payload: any = {
         text: transcript || "",
         title: campaignTitle,
         source: "live",
+        campaignId,
       };
       if (summaryText) payload.summary = summaryText;
-      if (campaignId) payload.campaignId = campaignId;
       if (existingSummaryId) payload.summaryId = existingSummaryId;
 
       const res = await fetch("/api/analyze", {
@@ -1903,38 +1922,31 @@ export default function RecordPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      if (!res.ok) {
-        console.error("/api/analyze returned", res.status, await res.text());
-      } else {
+      if (res.ok) {
         try {
           const data = await res.json();
-          // store returned summaryId so the Summary page can load the DB record
-          if (data?.summaryId && typeof window !== "undefined") {
-            window.localStorage.setItem("currentSummaryId", data.summaryId);
-          }
-        } catch (e) {
-          // ignore JSON parse errors
-        }
+          if (data?.summaryId) window.localStorage.setItem("currentSummaryId", data.summaryId);
+        } catch {}
+      } else {
+        console.error("/api/analyze returned", res.status, await res.text());
+      }
+
+      // Trigger character upserts (optional: fire-and-forget)
+      if (transcript?.trim()) {
+        fetch("/api/characters/upsert", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ campaignId, text: transcript }),
+        }).catch((e) => console.warn("[CharUpsert] error:", e));
       }
     } catch (e) {
       console.error("Failed to save transcript/summary", e);
     }
 
-    // Full cleanup and navigate to summary page
-    try {
-      cleanupRecording();
-    } catch (e) {
-      console.warn("cleanup failed", e);
-    }
-
-    if (campaignId) {
-      try {
-        router.push(`/campaigns/${campaignId}/summary`);
-      } catch (e) {
-        console.error("Failed to navigate to summary page", e);
-      }
-    }
+    try { cleanupRecording(); } catch (e) { console.warn("cleanup failed", e); }
+    router.push(`/campaigns/${campaignId}/summary`);
   };
+
 
   // ======= Character carousel data/state (new style) ======= //
   const [charItems, setCharItems] = useState<CharItem[]>([]);
@@ -2192,9 +2204,8 @@ export default function RecordPage() {
                 />
               </div>
               <button
-                onClick={() => currentCampaignId && handleEndSession()}
+                onClick={handleEndSession}
                 className="ml-45 mt-6 font-bold text-[#3D2304] underline hover:text-[#A43718] cursor-pointer disabled:opacity-50"
-                disabled={!currentCampaignId}
                 type="button"
               >
                 End Session

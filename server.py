@@ -63,13 +63,6 @@ SUMMARY_FORCE_FLUSH_AFTER_FINAL = os.getenv("SUMMARY_FORCE_FLUSH_AFTER_FINAL", "
 SUMMARY_DRAIN_TIMEOUT = float(os.getenv("SUMMARY_DRAIN_TIMEOUT", "5.0"))
 SESSION_IDLE_SEC = float(os.getenv("SESSION_IDLE_SEC", "8.0"))
 
-# last_upsert_t = 0.0
-# UPSERT_COOLDOWN = float(os.getenv("UPSERT_COOLDOWN", "10.0"))
-
-# MAX_UPSERT_CHARS = int(os.getenv("MAX_UPSERT_CHARS", "800"))
-# CHAR_UPSERT_CONNECT_TIMEOUT = float(os.getenv("CHAR_UPSERT_CONNECT_TIMEOUT", "2"))
-# CHAR_UPSERT_READ_TIMEOUT = float(os.getenv("CHAR_UPSERT_READ_TIMEOUT", "180"))
-
 # =====================================================================
 # SHARED CLIENTS (Whisper, VAD)
 # =====================================================================
@@ -267,7 +260,7 @@ def summarize_with_ollama(text: str, model: str = OLLAMA_SUMMARY_MODEL) -> str:
         "4) If the chunk contains ONLY table chat or no game content, output exactly: SKIP and not the following output rules.\n"
         "5) Output:\n"
         "   - First line: the title only (3 -5 words, no prefix).\n"
-        "   - Next 2–5 sentences: strictly derived from the chunk.\n"
+        "   - Next 2-5 sentences: strictly derived from the chunk.\n"
         "   - Nothing else.\n\n"
         f"Transcript chunk:\n{text}\n"
     )
@@ -331,7 +324,7 @@ class RollingSummarizer:
             return 0
         chunk = s[:hard_len]
         tail = chunk[-40:]
-        for p in ("。", "！", "？", ".", "!", "?"):
+        for p in ("。", "!", "?", ".", "!", "?"):
             i = tail.rfind(p)
             if i != -1:
                 return (hard_len - len(tail)) + i + 1
@@ -497,7 +490,7 @@ def answer(req: AnswerRequest):
     res = collection.query(query_embeddings=qbatch, n_results=req.top_k, where=effective_where, include=["documents", "metadatas", "distances"])
     ids = res.get("ids", [[]])[0]; docs = res.get("documents", [[]])[0]; metas = res.get("metadatas", [[]])[0]; dists = res.get("distances", [[]])[0]
     if not ids:
-        return {"answer": "I don’t know based on the current knowledge.", "used": []}
+        return {"answer": "I don't know based on the current knowledge.", "used": []}
     metas = [(m or {}) if isinstance(m, dict) else {} for m in metas]
     term = focus_term(req.question)
     if term:
@@ -632,7 +625,6 @@ async def handle_audio_ws(websocket: WebSocket):
         cooldown_sec=0.5
     )
 
-    # CHAR_UPSERT_URL = os.getenv("CHAR_UPSERT_URL", "http://127.0.0.1:3000/api/characters/upsert")
     campaign_id: Optional[str] = None
 
     try:
@@ -652,10 +644,7 @@ async def handle_audio_ws(websocket: WebSocket):
     except Exception:
         pass
 
-    # async def _post_characters_chunk_local(campaign_id_: Optional[str], text: str):
-
     async def _flush_and_finish(reason: str):
-        # global last_upsert_t
         leftover = rolling.flush().strip()
         if leftover:
             task = asyncio.create_task(_background_summary_task(send_queue, leftover))
