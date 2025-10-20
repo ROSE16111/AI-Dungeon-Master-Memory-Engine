@@ -1,4 +1,3 @@
-// app/api/characters/upsert/route.ts
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@prisma/client";
@@ -7,15 +6,24 @@ import { extractCharactersFromSession, type CharacterCard } from "@/lib/llm";
 
 export const runtime = "nodejs";
 
+// Expected request body shape
 type Body = { campaignId: string; text: string };
 
-// ---------------- helpers ----------------
+/**
+ * Returns a deduplicated version of an array.
+ * Works for both strings and objects by normalizing string entries.
+ */
 function uniq<T>(arr: T[] | undefined): T[] {
     return Array.from(
         new Set((arr ?? []).map((x) => (typeof x === "string" ? (x as string).trim() : x)))
     ).filter((x) => (typeof x === "string" ? (x as string).length > 0 : true)) as T[];
 }
 
+/**
+ * Merges two character cards into one by keeping existing fields
+ * and preferring new values from the incoming card when available.
+ * Lists like traits and goals are merged and deduplicated.
+ */
 function mergeCard(existing: CharacterCard, incoming: CharacterCard): CharacterCard {
     return {
         name: incoming.name || existing.name,
@@ -29,8 +37,12 @@ function mergeCard(existing: CharacterCard, incoming: CharacterCard): CharacterC
     };
 }
 
+/**
+ * Converts a CharacterCard object into a human-readable text format
+ * used for storing in the `summary` table (field: content).
+ * Each field becomes a titled block separated by blank lines.
+ */
 function cardToContent(c: CharacterCard): string {
-    // Build "Title\nValue\n\n" blocks; skip empty fields
     const blocks: string[] = [];
 
     const pushBlock = (title: string, value: string | string[] | undefined) => {
@@ -43,18 +55,22 @@ function cardToContent(c: CharacterCard): string {
     pushBlock("Role", c.role);
     pushBlock("Affiliation", c.affiliation);
     pushBlock("Traits", c.traits);
-    pushBlock("Goals", c.goals?.join("; ")); // keep semicolons between goals
+    pushBlock("Goals", c.goals?.join("; "));
     pushBlock("Last location", c.lastLocation);
     pushBlock("Status", c.status);
     pushBlock("Notes", c.notes);
 
-    // Fallback: at least emit the name if absolutely nothing else exists
+    // Fallback to at least the name if no data exists
     if (blocks.length === 0) return c.name || "";
 
-    // Separate sections by a single blank line
     return blocks.join("\n\n");
-    }
+}
 
+/**
+ * Parses the stored content text back into a CharacterCard object.
+ * Recognizes both block-style (field: value) and simple bullet styles.
+ * Provides fallback parsing for legacy or loosely formatted content.
+ */
 function parseContentToCard(name: string, content: string | null | undefined): CharacterCard {
     const text = (content ?? "").trim();
 
@@ -88,6 +104,7 @@ function parseContentToCard(name: string, content: string | null | undefined): C
         notes: blocks["notes"],
     };
 
+    // If we found any actual data, return it directly
     const anyNew =
         !!fromBlocks.role ||
         !!fromBlocks.affiliation ||
@@ -99,7 +116,7 @@ function parseContentToCard(name: string, content: string | null | undefined): C
 
     if (anyNew) return fromBlocks;
 
-    // Fallback parser (bullets) ...
+    // Fallback: try to match single-line "Field: value" style
     const get = (re: RegExp) => text.match(re)?.[1]?.trim();
     const list = (re: RegExp, sep: RegExp) =>
         get(re)?.split(sep).map((s) => s.trim()).filter(Boolean) ?? [];
@@ -116,6 +133,10 @@ function parseContentToCard(name: string, content: string | null | undefined): C
     };
 }
 
+/**
+ * Combines multiple CharacterCard objects with the same name.
+ * Ensures unique names (case-insensitive) and merges repeated entries.
+ */
 function coalesceByName(cards: CharacterCard[]): CharacterCard[] {
     const byKey = new Map<string, CharacterCard>();
     for (const c of cards) {
@@ -134,6 +155,18 @@ function coalesceByName(cards: CharacterCard[]): CharacterCard[] {
 }
 
 // ---------------- route ----------------
+
+/**
+ * POST /api/characters/upsert
+ *
+ * Extracts character information from a campaign transcript and
+ * upserts Character Summaries in the Prisma database.
+ *
+ * - Uses the LLM-based extractor to generate character cards.
+ * - Merges new information with existing summaries.
+ * - Creates or updates entries in the `summary` table (type: "character").
+ * - Touches the parent campaign’s update timestamp.
+ */
 export async function POST(req: Request) {
     try {
         const body = (await req.json()) as Body;
@@ -143,13 +176,16 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: "campaignId and text required" }, { status: 400 });
         }
 
+        // Extract structured character data via LLM
         const extracted = await extractCharactersFromSession(text);
         if (!extracted?.length) return NextResponse.json({ upserts: [] });
 
+        // Merge duplicates by name
         const found = coalesceByName(extracted);
         const names = found.map((c) => c.name).filter(Boolean);
         if (!names.length) return NextResponse.json({ upserts: [] });
 
+        // Fetch existing summaries for this campaign to merge against
         const existing = await prisma.summary.findMany({
         where: { campaignId, type: SummaryType.character, roleName: { in: names } },
         select: { id: true, roleName: true, content: true },
@@ -157,11 +193,11 @@ export async function POST(req: Request) {
 
         const byName = new Map<string, (typeof existing)[number]>();
         for (const row of existing) {
-        if (!row.roleName) continue; // guard nullable roleName
+        if (!row.roleName) continue;
         byName.set(row.roleName, row);
         }
 
-        // IMPORTANT: type as array of Prisma promises (NOT the interactive tx overload)
+        // Prepare Prisma operations for transactional upsert
         const ops: Prisma.PrismaPromise<{ id: string; roleName: string | null }>[] = [];
 
         for (const inc of found) {
@@ -173,6 +209,7 @@ export async function POST(req: Request) {
         const content = cardToContent(merged);
 
         if (had) {
+            // Update existing summary
             ops.push(
             prisma.summary.update({
                 where: { id: had.id },
@@ -181,6 +218,7 @@ export async function POST(req: Request) {
             })
             );
         } else {
+            // Create new summary
             ops.push(
             prisma.summary.create({
                 data: { type: SummaryType.character, campaignId, roleName: name, content },
@@ -192,16 +230,21 @@ export async function POST(req: Request) {
 
         if (!ops.length) return NextResponse.json({ upserts: [] });
 
+        // Execute all upserts in a transaction
         const rows = await prisma.$transaction(ops);
 
-        // touch campaign update time
+        // Update campaign timestamp for synchronization
         await prisma.campaign.update({
         where: { id: campaignId },
         data: { updateDate: new Date() },
         select: { id: true },
         });
 
-        const upserts = rows.map((r: { id: any; roleName: any; }) => ({ id: r.id, name: (r.roleName ?? "") || "" }));
+        // Return lightweight list of updated character IDs and names
+        const upserts = rows.map((r) => ({
+        id: r.id,
+        name: (r.roleName ?? "") || "",
+        }));
         return NextResponse.json({ upserts });
     } catch (err: any) {
         console.error("POST /api/characters/upsert error:", err?.message || err);

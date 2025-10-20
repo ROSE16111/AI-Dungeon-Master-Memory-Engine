@@ -1,21 +1,19 @@
-import { Ollama } from "ollama";
-
-const client = new Ollama({ host: process.env.OLLAMA_HOST });
-const model = process.env.OLLAMA_MODEL ?? "phi3:medium";
-
-const LONG_THRESHOLD_WORDS = 1000;
-const CHUNK_TEXT = 700;
-const CHUNK_OVERLAP = 70;
-const TEMP = 0.1;
-const MERGE_BATCH = 6;
+// Thresholds and hyperparameters for splitting, summarizing, and merging.
+// Values are tuned for short, factual recaps rather than creative writing.
+const LONG_THRESHOLD_WORDS = 1000;  // Single-pass summarization below this word count
+const CHUNK_TEXT = 700;             // Approximate words per chunk for long transcripts
+const CHUNK_OVERLAP = 70;           // Overlap preserves context at chunk boundaries
+const TEMP = 0.1;                   // Low temperature to reduce fabrication
+const MERGE_BATCH = 6;              // Number of chunk summaries merged per round
 
 /**
- * Splits a long transcript into overlapping chunks of text.
+ * Splits a long transcript into overlapping word-range chunks.
+ * Overlap helps keep entities and clauses intact across boundaries.
  *
  * @param text - Full transcript text to split.
- * @param size - Number of words per chunk (default: `CHUNK_WORDS`).
- * @param overlap - Number of overlapping words between chunks (default: `CHUNK_OVERLAP`).
- * @returns Array of chunk strings, each containing up to `size` words.
+ * @param size - Target words per chunk.
+ * @param overlap - Words from the end of the previous chunk to repeat at the start of the next.
+ * @returns Array of chunk strings.
  */
 function splitIntoChunks(
   text: string,
@@ -34,19 +32,21 @@ function splitIntoChunks(
 }
 
 /**
- * Calls the Ollama LLM with the given prompt and logs the duration.
- *
- * @param prompt - The prompt text to send to the model.
- * @param label - A label used for console timing and error logging.
- * @returns LLM response.
- * @throws Rethrows errors from Ollama client after logging.
+ * Low-level Ollama invocation using the REST API.
+ * Using fetch keeps the dependency surface small and avoids SDK differences
+ * across runtimes like Node, Next.js, and serverless environments.
  */
-
 const OLLAMA_HOST = process.env.OLLAMA_HOST || "http://localhost:11434";
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "phi3:medium";
 
 /**
  * Calls the Ollama REST API with a given prompt.
+ * Adds basic timing and structured error logging for observability.
+ *
+ * @param prompt - Prompt text to send.
+ * @param label - Console timer label to identify the request in logs.
+ * @returns Raw model response text.
+ * @throws Rethrows on non-OK HTTP or network failures.
  */
 async function callLLM(prompt: string, label: string): Promise<string> {
   console.time(label);
@@ -81,27 +81,14 @@ async function callLLM(prompt: string, label: string): Promise<string> {
   }
 }
 
-// async function callLLM(prompt: string, label: string): Promise<string> {
-//     console.time(label);
-//     try {
-//         const res = await client.generate({ model, prompt, options: { temperature: TEMP } });
-//         const out = (res.response ?? "").trim();
-//         console.timeEnd(label);
-//         return out;
-//     } catch (err: any) {
-//         console.timeEnd(label);
-//         console.error(`${label}_ERROR`, { msg: err?.message, code: err?.code, name: err?.name });
-//         throw err;
-//     }
-// }
-
 /**
- * Summarizes a single transcript chunk into factual bullet point summary.
+ * Summarizes a single transcript chunk with strict factual constraints.
+ * Output is structured as short titled sections to support later merging.
  *
- * @param chunk - The transcript slice text.
- * @param idx - Index of this chunk (zero-based).
- * @param total - Total number of chunks.
- * @returns LLM-produced summary of the chunk.
+ * @param chunk - Transcript slice.
+ * @param idx - Chunk index for logging.
+ * @param total - Total chunk count for logging.
+ * @returns Summary text for this chunk.
  */
 async function summarizeChunk(
   chunk: string,
@@ -132,11 +119,12 @@ async function summarizeChunk(
 }
 
 /**
- * Merges summaries in hierarchical batches to avoid issues with context window
- * and timeout.
+ * Hierarchical merge to combine many chunk summaries without exceeding
+ * the model context window. Performs repeated merging in small groups
+ * until a single summary remains.
  *
- * @param summaries - Array of partial summaries from individual chunks.
- * @returns A single merged summary string.
+ * @param summaries - Individual chunk summaries.
+ * @returns Final merged summary.
  */
 async function hierarchicalMerge(summaries: string[]): Promise<string> {
   let layer = summaries.slice();
@@ -156,10 +144,11 @@ async function hierarchicalMerge(summaries: string[]): Promise<string> {
 }
 
 /**
- * Combines a group of chunk summaries into overall summary.
+ * Merge prompt that de-duplicates facts and keeps chronological flow.
+ * The output format mirrors the chunk summaries for consistency.
  *
- * @param summaries - Array of bullet point summaries to merge.
- * @returns LLM-produced merged bullet point summary.
+ * @param summaries - Group of chunk summaries to merge.
+ * @returns Merged summary text.
  */
 async function mergeSummaries(summaries: string[]): Promise<string> {
   const prompt = `Combine the given Dungeons & Dragons chunk summaries into ONE faithful recap.
@@ -187,14 +176,12 @@ async function mergeSummaries(summaries: string[]): Promise<string> {
 }
 
 /**
- * Summarizes an entire TTRPG session transcript.
+ * High-level entry point for summarizing an entire session transcript.
+ * Short texts use a single prompt; long texts are chunked then merged.
+ * Includes fallbacks to ensure a useful result even when some steps fail.
  *
- * - If short, summarises in a single pass.
- * - If long, splits into chunks, summarizes each, then merges.
- * - Includes fallbacks if chunk or merge steps fail.
- *
- * @param rawText - Full session transcript text.
- * @returns Final summary as a bullet point string, trimmed if very long.
+ * @param rawText - Full session transcript.
+ * @returns Final summary string.
  */
 export async function summarizeDnDSession(rawText: string): Promise<string> {
   const text = rawText?.trim() ?? "";
@@ -202,6 +189,7 @@ export async function summarizeDnDSession(rawText: string): Promise<string> {
 
   const wordCount = text.split(/\s+/).length;
 
+  // Single-pass summarization for short transcripts to reduce latency.
   if (wordCount <= LONG_THRESHOLD_WORDS) {
     const prompt = `You are a faithful note-taker for a Table-Top Role Plating (Dungeons & Dragons) session.
 
@@ -228,9 +216,11 @@ export async function summarizeDnDSession(rawText: string): Promise<string> {
     return out;
   }
 
+  // Chunking path for longer transcripts to stay within model context.
   const chunks = splitIntoChunks(text);
   const miniSummaries: string[] = [];
 
+  // Summarize each chunk independently. Errors are isolated per chunk.
   for (let i = 0; i < chunks.length; i++) {
     try {
       const s = await summarizeChunk(chunks[i], i, chunks.length);
@@ -238,6 +228,7 @@ export async function summarizeDnDSession(rawText: string): Promise<string> {
     } catch {}
   }
 
+  // If all chunk calls failed, attempt a clipped single-pass fallback.
   if (miniSummaries.length === 0) {
     const clipped = text.split(/\s+/).slice(0, CHUNK_TEXT).join(" ");
     const fallbackPrompt = `You are a precise session scribe for a Dungeons & Dragons game.
@@ -250,16 +241,21 @@ export async function summarizeDnDSession(rawText: string): Promise<string> {
     return out;
   }
 
+  // Merge all partial summaries into a single recap.
   try {
     const merged = await hierarchicalMerge(miniSummaries);
     if (merged) return merged.trim();
   } catch {}
 
+  // Last resort: return concatenated mini summaries with a soft length cap.
   const joined = miniSummaries.join("\n");
   return joined.length > 4000 ? joined.slice(0, 4000) + "\n…" : joined;
 }
 
-/** Attempts to parse possibly messy JSON */
+/**
+ * Attempts to parse JSON from a potentially noisy model output.
+ * Greedy match finds the first top-level object or array to increase robustness.
+ */
 function safeJSON<T = any>(raw: string): T | null {
   try {
     const m = raw.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
@@ -270,18 +266,28 @@ function safeJSON<T = any>(raw: string): T | null {
   }
 }
 
-/** Extract characters mentioned in the transcript as structured records. */
+/**
+ * Character card schema for structured extraction.
+ * Many fields are optional and should be omitted if not explicitly stated.
+ */
 export type CharacterCard = {
   name: string;
-  role?: string;          // e.g., "wizard", "innkeeper", "half-elf ranger"
-  affiliation?: string;   // faction, party, town etc.
-  traits?: string[];      // short descriptors
-  goals?: string[];       // stated aims/quests
-  lastLocation?: string;  // last explicit place mentioned
-  status?: string;        // e.g., injured, missing, hostile, allied
-  notes?: string;         // free text fallback
+  role?: string;          // Example: "wizard", "innkeeper", "half-elf ranger"
+  affiliation?: string;   // Example: faction, party, town
+  traits?: string[];      // Short descriptors from the transcript
+  goals?: string[];       // Stated aims or quests
+  lastLocation?: string;  // Last explicit place mentioned
+  status?: string;        // Example: injured, missing, hostile, allied
+  notes?: string;         // Free text fallback
 };
 
+/**
+ * Extracts character cards from a transcript chunk with strict fidelity.
+ * Returns unique entries by normalized name to avoid duplicates.
+ *
+ * @param rawText - Transcript chunk.
+ * @returns Array of deduplicated character cards.
+ */
 export async function extractCharactersFromSession(rawText: string): Promise<CharacterCard[]> {
   const text = (rawText ?? "").trim();
   if (!text) return [];
@@ -314,6 +320,8 @@ export async function extractCharactersFromSession(rawText: string): Promise<Cha
 
   const out = await callLLM(prompt, "LLM_chars_chunk");
   const parsed = safeJSON<CharacterCard[]>(out) ?? [];
+
+  // Remove duplicates using a case-insensitive name key.
   const seen = new Set<string>();
   const unique = parsed.filter(c => {
     const k = (c?.name || "").trim().toLowerCase();
@@ -322,8 +330,7 @@ export async function extractCharactersFromSession(rawText: string): Promise<Cha
     seen.add(k);
     return true;
   });
+
+  // Keep a practical upper bound to avoid flooding the UI.
   return unique.slice(0, 25);
 }
-
-
-

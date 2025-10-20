@@ -24,55 +24,67 @@ from starlette.websockets import WebSocketState
 # =====================================================================
 # SETTINGS
 # =====================================================================
+# Allow MKL/OpenMP to load even if duplicates are detected on some platforms
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+# Avoid symlink use in HF cache (helps on some filesystems)
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS", "1")
 
-SAMPLE_RATE = 16000
-SILENCE_END_MS = 800
-PARTIAL_INTERVAL = 0.9
-OVERLAP_SEC = 0.2
+# Core audio and streaming knobs
+SAMPLE_RATE = 16000                  # VAD and Whisper expect 16 kHz PCM
+SILENCE_END_MS = 800                 # Silence threshold to finalize an utterance
+PARTIAL_INTERVAL = 0.9               # Seconds between partial ASR updates
+OVERLAP_SEC = 0.2                    # Overlap for partial decoding context
 
+# Summarization chunk sizing
 SUMMARY_CHUNK_CHARS = int(os.getenv("SUMMARY_CHUNK_CHARS", "240"))
 
+# Whisper configuration
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small")
-WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "cpu")
-WHISPER_COMPUTE = os.getenv("WHISPER_COMPUTE", "int8")
+WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "cpu")     # "cpu" or "cuda"
+WHISPER_COMPUTE = os.getenv("WHISPER_COMPUTE", "int8")  # compute_type per faster-whisper
 LANG = os.getenv("ASR_LANG", "en")
 BEAM = int(os.getenv("BEAM", "1"))
 TEMP = 0.0
 
+# Vector store configuration
 DB_PATH = os.getenv("CHROMA_DB_PATH", "./chroma_db")
 COLLECTION_NAME = os.getenv("CHROMA_COLLECTION", "docs")
 
+# Ollama endpoints and models
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
 EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text")
 
+# LLM used for short summaries and final answers
 OLLAMA_SUMMARY_MODEL = os.getenv("OLLAMA_SUMMARY_MODEL", "phi3:medium")
 OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "120"))
 
+# Answering behavior
 MAX_DOCS = int(os.getenv("MAX_DOCS", "3"))
 MAX_CHARS_PER_DOC = int(os.getenv("MAX_CHARS_PER_DOC", "800"))
-
 STOP_SENTINEL = os.getenv("STOP_SENTINEL", "<END>")
 MAX_PREDICT = int(os.getenv("MAX_PREDICT", "96"))
-ANSWER_ECHO_ONLY = os.getenv("ANSWER_ECHO_ONLY", "0") == "1"
-MAX_UTTER_SEC = float(os.getenv("MAX_UTTER_SEC", "12.0"))
+ANSWER_ECHO_ONLY = os.getenv("ANSWER_ECHO_ONLY", "0") == "1"  # debug mode to echo context
+MAX_UTTER_SEC = float(os.getenv("MAX_UTTER_SEC", "12.0"))     # hard cap per utterance
 
+# Rolling summarizer behavior
 SUMMARY_MIN_FLUSH_CHARS = int(os.getenv("SUMMARY_MIN_FLUSH_CHARS", "80"))
 SUMMARY_FORCE_FLUSH_AFTER_FINAL = os.getenv("SUMMARY_FORCE_FLUSH_AFTER_FINAL", "1") == "1"
 SUMMARY_DRAIN_TIMEOUT = float(os.getenv("SUMMARY_DRAIN_TIMEOUT", "5.0"))
-SESSION_IDLE_SEC = float(os.getenv("SESSION_IDLE_SEC", "8.0"))
+SESSION_IDLE_SEC = float(os.getenv("SESSION_IDLE_SEC", "8.0"))  # WS auto-close after idle
 
 # =====================================================================
 # SHARED CLIENTS (Whisper, VAD)
 # =====================================================================
 print("[Init] Loading Whisper model…")
+# Whisper ASR instance reused across requests to avoid cold start penalties
 whisper = WhisperModel(WHISPER_MODEL, device=WHISPER_DEVICE, compute_type=WHISPER_COMPUTE)
-vad = webrtcvad.Vad(2)
+# WebRTC VAD for simple voice activity detection on 20 ms frames
+vad = webrtcvad.Vad(2)  # 0..3, higher = more aggressive speech detection
 
 # =====================================================================
 # EMBEDDINGS (Ollama) — tolerant to Chroma EF API changes
 # =====================================================================
+# EmbeddingFunction implementation that talks to Ollama /api/embeddings
 AllowedMeta = Union[str, int, float, bool]
 
 class OllamaEmbeddingFunction:
@@ -80,18 +92,27 @@ class OllamaEmbeddingFunction:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout = timeout
+
     def __call__(self, input: List[str]) -> List[List[float]]:
+        # Chroma may call EF directly via __call__
         texts = [input] if isinstance(input, str) else input
         return self._embed(texts)
+
     def name(self) -> str:
         return f"ollama::{self.model}"
+
     def embed_documents(self, input: List[str], **kwargs) -> List[List[float]]:
+        # Backward-compat with EF usage in older Chroma versions
         texts = [input] if isinstance(input, str) else input
         return self._embed(texts)
+
     def embed_query(self, input: Union[str, List[str]], **kwargs) -> List[List[float]]:
+        # Some EF APIs treat query separately; we normalize to list-of-list
         text = input[0] if isinstance(input, list) else input
         return self._embed([text])
+
     def _embed(self, texts: List[str]) -> List[List[float]]:
+        # Makes one HTTP call per text to keep error boundaries simple
         out: List[List[float]] = []
         for t in texts:
             r = requests.post(
@@ -107,15 +128,22 @@ class OllamaEmbeddingFunction:
             out.append(emb)
         return out
 
+# Global EF instance shared by Chroma
 ef = OllamaEmbeddingFunction()
 
 def embed_query_batched(text: str) -> List[List[float]]:
+    """
+    Defensive wrapper to obtain a single query embedding as a list-of-list.
+    Handles minor API shape differences across EF versions and falls back to raw HTTP.
+    """
     try:
         vec = ef.embed_query(input=text)
     except TypeError:
+        # Some EF versions accept positional arg
         try:
             vec = ef.embed_query(text)
         except Exception:
+            # Last resort: call EF like a function, then raw HTTP
             try:
                 vec = ef([text])
             except Exception:
@@ -127,8 +155,11 @@ def embed_query_batched(text: str) -> List[List[float]]:
                 r.raise_for_status()
                 emb = r.json().get("embedding")
                 vec = [emb] if emb else None
+
     if vec is None:
         raise RuntimeError("Failed to obtain query embedding.")
+
+    # Normalize shapes: [floats] -> [[floats]]
     if isinstance(vec, list) and vec and isinstance(vec[0], float):
         return [vec]
     if isinstance(vec, list) and vec and isinstance(vec[0], list):
@@ -138,10 +169,15 @@ def embed_query_batched(text: str) -> List[List[float]]:
 # =====================================================================
 # CHROMA
 # =====================================================================
+# Global clients; initialized once and self-healed if needed
 chroma = None
 collection = None
 
 def init_chroma():
+    """
+    Initialize a persistent Chroma client and collection with the custom EF.
+    Creates the database directory if required.
+    """
     global chroma, collection
     os.makedirs(DB_PATH, exist_ok=True)
     chroma = chromadb.PersistentClient(path=DB_PATH, settings=Settings(anonymized_telemetry=False))
@@ -149,6 +185,9 @@ def init_chroma():
     print(f"[Chroma] ready at {DB_PATH}, collection={COLLECTION_NAME}")
 
 def ensure_collection():
+    """
+    Light-touch health check for the global collection. Re-inits on failure.
+    """
     global collection
     try:
         _ = collection.count()
@@ -156,6 +195,7 @@ def ensure_collection():
         print(f"[Chroma] ensure failed ({type(e).__name__}): {e} — reinit")
         init_chroma()
 
+# Eager init for server start
 init_chroma()
 
 # =====================================================================
@@ -163,13 +203,18 @@ init_chroma()
 # =====================================================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """
+    App lifespan hook used to warm Ollama models for faster first request.
+    """
     try:
+        # Warm up generate endpoint
         requests.post(
             f"{OLLAMA_URL.rstrip('/')}/api/generate",
             headers={"Content-Type": "application/json"},
             json={"model": OLLAMA_SUMMARY_MODEL, "prompt": "ok", "stream": False, "keep_alive": "1h"},
             timeout=50,
         )
+        # Warm up embeddings endpoint
         requests.post(
             f"{OLLAMA_URL.rstrip('/')}/api/embeddings",
             headers={"Content-Type": "application/json"},
@@ -178,17 +223,29 @@ async def lifespan(app: FastAPI):
         )
         print("[Warmup] Ollama models loaded")
     except Exception as e:
+        # Server should still boot if warmup fails
         print("[Warmup] skipped:", e)
     yield
 
+# FastAPI app instance with permissive CORS by default
 app = FastAPI(lifespan=lifespan)
 allowed_origins = os.getenv("CORS_ORIGINS", "*").split(",")
-app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"]
+)
 
 # =====================================================================
 # UTILS
 # =====================================================================
 def focus_term(q: str) -> Optional[str]:
+    """
+    Heuristic for extracting a focus term from a query.
+    Attempts 'who is X' first; otherwise returns the longest capitalized token.
+    """
     ql = q.lower().strip()
     m = re.search(r"\bwho\s+is\s+([a-z0-9' -]+)\b", ql)
     if m:
@@ -197,14 +254,28 @@ def focus_term(q: str) -> Optional[str]:
     return max(caps, key=len).lower() if caps else None
 
 def first_n_sentences(t: str, n: int = 2) -> str:
+    """
+    Return the first n sentence-like segments based on simple punctuation boundaries.
+    """
     parts = re.split(r'(?<=[.!?])\s+', t.strip())
     return ' '.join(parts[:n]).strip()
 
 def trim_text(s: str, n: int) -> str:
+    """
+    Truncate long strings with an ellipsis suffix to fit display constraints.
+    """
     s = s or ""
     return s if len(s) <= n else s[:n] + "…"
 
-def chunk_text(text: str, max_chars: int = int(os.getenv("CHUNK_CHARS", "800")), overlap: int = int(os.getenv("CHUNK_OVERLAP", "30"))) -> List[str]:
+def chunk_text(
+    text: str,
+    max_chars: int = int(os.getenv("CHUNK_CHARS", "800")),
+    overlap: int = int(os.getenv("CHUNK_OVERLAP", "30"))
+) -> List[str]:
+    """
+    Split text into overlapping sentence-based chunks for embedding.
+    Overlap helps maintain context across boundaries.
+    """
     sents = re.split(r'(?<=[.!?])\s+', (text or "").strip())
     chunks, cur = [], ""
     for s in sents:
@@ -220,6 +291,9 @@ def chunk_text(text: str, max_chars: int = int(os.getenv("CHUNK_CHARS", "800")),
     return chunks
 
 def clean_metadata(meta: dict | None) -> Dict[str, AllowedMeta]:
+    """
+    Ensure metadata contains only JSON-serializable primitives required by Chroma.
+    """
     out: Dict[str, AllowedMeta] = {}
     if not meta:
         return out
@@ -230,12 +304,21 @@ def clean_metadata(meta: dict | None) -> Dict[str, AllowedMeta]:
     return out
 
 def is_speech_int16(pcm16: np.ndarray) -> bool:
+    """
+    Run VAD on a 16-bit PCM audio buffer at SAMPLE_RATE.
+    Returns True if VAD detects speech on this frame.
+    """
     try:
         return vad.is_speech(pcm16.tobytes(), SAMPLE_RATE)
     except Exception:
+        # Fail open to avoid breaking the stream on occasional errors
         return False
 
 def transcribe_float32(wave_f32: np.ndarray) -> str:
+    """
+    Transcribe a float32 mono waveform array using faster-whisper.
+    VAD is handled externally; this runs pure ASR.
+    """
     segs, _ = whisper.transcribe(
         wave_f32,
         language=LANG,
@@ -248,9 +331,14 @@ def transcribe_float32(wave_f32: np.ndarray) -> str:
     return "".join(s.text for s in segs).strip()
 
 def summarize_with_ollama(text: str, model: str = OLLAMA_SUMMARY_MODEL) -> str:
+    """
+    Summarize a transcript chunk with strict extraction rules for TTRPG notes.
+    Retries on transient network issues with exponential backoff.
+    """
     print(f"\n[Summary] Calling Ollama with {len(text.split())} words")
     print(f"[Summary] Input preview: {text[:150]}...\n")
 
+    # The prompt keeps the model faithful to the transcript and allows SKIP output
     prompt = (
         "You are a STRICT extractor for tabletop role-playing game (TTRPG) session notes.\n"
 
@@ -299,6 +387,7 @@ def summarize_with_ollama(text: str, model: str = OLLAMA_SUMMARY_MODEL) -> str:
             print(f"[Summary] Ollama response:\n{out}\n{'-'*50}")
             return out
         except requests.exceptions.Timeout:
+            # Retry timeouts with exponential backoff
             if attempt < max_retries:
                 sleep_s = backoff_base * (2 ** attempt)
                 print(f"[Summary][retry] Timeout, retrying in {sleep_s:.2f}s (attempt {attempt+1}/{max_retries})")
@@ -306,6 +395,7 @@ def summarize_with_ollama(text: str, model: str = OLLAMA_SUMMARY_MODEL) -> str:
                 continue
             return "[Error] Timeout contacting Ollama"
         except requests.exceptions.RequestException as e:
+            # Retry only connection errors; bubble up other HTTP errors
             if attempt < max_retries and isinstance(e, requests.exceptions.ConnectionError):
                 sleep_s = backoff_base * (2 ** attempt)
                 print(f"[Summary][retry] Connection error, retrying in {sleep_s:.2f}s (attempt {attempt+1}/{max_retries}): {e}")
@@ -314,19 +404,30 @@ def summarize_with_ollama(text: str, model: str = OLLAMA_SUMMARY_MODEL) -> str:
             return f"[Error] {e}"
 
 async def summarize_async(text: str) -> str:
+    """
+    Run the blocking summarizer in a thread to keep the event loop responsive.
+    """
     return await asyncio.to_thread(summarize_with_ollama, text)
 
 class RollingSummarizer:
+    """
+    Simple rolling buffer that collects text until a character threshold,
+    then emits segments aligned to sentence boundaries where possible.
+    """
     def __init__(self, threshold_chars: int = SUMMARY_CHUNK_CHARS, fn: Optional[Callable[[str], str]] = None, cooldown_sec: float = 0.0, min_chunk_chars: int = 120):
         self.threshold = max(1, int(threshold_chars))
         self.min_chunk = max(1, int(min_chunk_chars))
-        self.fn = fn or (lambda s: s)
+        self.fn = fn or (lambda s: s)           # identity by default
         self.cooldown_sec = cooldown_sec
         self._buf: list[str] = []
-        self._carry: str = ""
+        self._carry: str = ""                   # residual text below min_chunk
         self._last_t = 0.0
 
     def _split_on_sentence(self, s: str, hard_len: int) -> int:
+        """
+        Choose a cut index near the threshold that ends at a sentence-like boundary.
+        If none found, return hard_len.
+        """
         if len(s) < hard_len:
             return 0
         chunk = s[:hard_len]
@@ -338,6 +439,10 @@ class RollingSummarizer:
         return hard_len
 
     def push(self, text: str) -> list[str]:
+        """
+        Add new text to the rolling buffer and emit zero or more processed segments.
+        Respects cooldown to avoid over-emitting very small chunks.
+        """
         self._buf.append(text or "")
         s = self._carry + "".join(self._buf)
         self._buf.clear()
@@ -352,6 +457,7 @@ class RollingSummarizer:
             cut = self._split_on_sentence(s, self.threshold)
             chunk, s = s[:cut], s[cut:]
             if len(chunk) < self.min_chunk:
+                # Not worth summarizing; carry forward
                 self._carry = chunk + s
                 s = ""
                 break
@@ -364,6 +470,7 @@ class RollingSummarizer:
                 out.append(f"[Error summarizing chunk] {e}")
             print(f"[Rolling] Current buffer len={len(s)}, threshold={self.threshold}")
 
+        # Keep small remainder for the next push unless we can safely emit it
         self._carry = s if len(s) < self.min_chunk else ""
         if self._carry == "" and s:
             try:
@@ -379,6 +486,10 @@ class RollingSummarizer:
         return out
 
     def flush(self) -> str:
+        """
+        Emit any remaining text in the buffer without enforcing thresholds.
+        Intended for end-of-session or utterance finalization.
+        """
         s = (self._carry + "".join(self._buf)).strip()
         self._carry, self._buf = "", []
         if not s:
@@ -391,6 +502,7 @@ class RollingSummarizer:
 # =====================================================================
 # MODELS
 # =====================================================================
+# Pydantic models for request validation and OpenAPI docs
 class IngestTranscriptRequest(BaseModel):
     id_prefix: str
     text: str
@@ -419,11 +531,22 @@ class AnswerRequest(BaseModel):
 # =====================================================================
 @app.get("/health")
 def health():
+    """
+    Health and diagnostics endpoint for quick status checks.
+    Returns model names and current collection size.
+    """
     ensure_collection()
-    return {"ok": True, "models": {"whisper": WHISPER_MODEL, "embed": EMBED_MODEL, "gen": OLLAMA_SUMMARY_MODEL}, "db": {"path": DB_PATH, "collection": COLLECTION_NAME, "count": collection.count()}}
+    return {
+        "ok": True,
+        "models": {"whisper": WHISPER_MODEL, "embed": EMBED_MODEL, "gen": OLLAMA_SUMMARY_MODEL},
+        "db": {"path": DB_PATH, "collection": COLLECTION_NAME, "count": collection.count()},
+    }
 
 @app.post("/admin/clear_collection")
 def admin_clear_collection():
+    """
+    Hard delete of all vectors and metadata in the current collection.
+    """
     ensure_collection()
     try:
         collection.delete(where={})
@@ -433,6 +556,9 @@ def admin_clear_collection():
 
 @app.post("/admin/reset_disk")
 def admin_reset_disk():
+    """
+    Delete the on-disk Chroma database directory and recreate a fresh collection.
+    """
     try:
         if os.path.isdir(DB_PATH):
             shutil.rmtree(DB_PATH)
@@ -446,6 +572,10 @@ def admin_reset_disk():
 # =====================================================================
 @app.post("/ingest_transcript")
 def ingest_transcript(req: IngestTranscriptRequest):
+    """
+    Split a transcript into sentence-based chunks and add to Chroma with metadata.
+    Sets 'type'='raw' to distinguish live or transcript content.
+    """
     ensure_collection()
     chunks = chunk_text(req.text)
     if not chunks:
@@ -460,6 +590,10 @@ def ingest_transcript(req: IngestTranscriptRequest):
 
 @app.post("/ingest")
 def ingest(req: IngestRequest):
+    """
+    Ingest arbitrary items as-is into Chroma.
+    Caller controls ids, text, and optional metadata.
+    """
     ensure_collection()
     ids = [str(i.id) for i in req.items]
     docs = [i.text for i in req.items]
@@ -471,33 +605,60 @@ def ingest(req: IngestRequest):
 
 @app.post("/query")
 def query(req: QueryRequest):
+    """
+    Vector query against the collection.
+    Returns top_k results with documents, metadata, and distances.
+    """
     ensure_collection()
     try:
         qbatch = embed_query_batched(req.query)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Query embedding failed: {e}")
-    res = collection.query(query_embeddings=qbatch, n_results=req.top_k, where=req.where, include=["documents", "metadatas", "distances"])
+    res = collection.query(
+        query_embeddings=qbatch,
+        n_results=req.top_k,
+        where=req.where,
+        include=["documents", "metadatas", "distances"]
+    )
     ids = res.get("ids", [[]])[0]
     docs = res.get("documents", [[]])[0]
     metas = res.get("metadatas", [[]])[0]
     dists = res.get("distances", [[]])[0]
     items = []
     for i in range(len(ids)):
-        items.append({"id": ids[i], "text": docs[i], "metadata": metas[i], "distance": dists[i] if i < len(dists) else None})
+        items.append({
+            "id": ids[i],
+            "text": docs[i],
+            "metadata": metas[i],
+            "distance": dists[i] if i < len(dists) else None
+        })
     return {"results": items}
 
 @app.post("/answer")
 def answer(req: AnswerRequest):
+    """
+    Retrieve a small context set and ask the LLM to answer strictly from it.
+    Optionally biases selection using a detected focus term.
+    """
     ensure_collection()
     effective_where = req.where if (req.where and len(req.where)) else {"type": "raw"}
     try:
         qbatch = embed_query_batched(req.question)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Query embedding failed: {e}")
-    res = collection.query(query_embeddings=qbatch, n_results=req.top_k, where=effective_where, include=["documents", "metadatas", "distances"])
+
+    res = collection.query(
+        query_embeddings=qbatch,
+        n_results=req.top_k,
+        where=effective_where,
+        include=["documents", "metadatas", "distances"]
+    )
     ids = res.get("ids", [[]])[0]; docs = res.get("documents", [[]])[0]; metas = res.get("metadatas", [[]])[0]; dists = res.get("distances", [[]])[0]
+
     if not ids:
         return {"answer": "I don't know based on the current knowledge.", "used": []}
+
+    # Optional re-ranking based on a detected proper noun to improve relevance
     metas = [(m or {}) if isinstance(m, dict) else {} for m in metas]
     term = focus_term(req.question)
     if term:
@@ -508,16 +669,24 @@ def answer(req: AnswerRequest):
         if chosen:
             chosen.sort(key=lambda t: t[3], reverse=True)
             ids, docs, metas = zip(*[(c[0], c[1], c[2]) for c in chosen]); ids, docs, metas = list(ids), list(docs), list(metas)
+
+    # Trim to configured context size
     ids, docs, metas = ids[:MAX_DOCS], docs[:MAX_DOCS], metas[:MAX_DOCS]
+
+    # Build a short plain-text context for the model
     ctx_lines = []
     for i, (d, m, id_) in enumerate(zip(docs, metas, ids), start=1):
         tag = (m or {}).get("type")
         ctx_lines.append(f"[{i}] id={id_} type={tag}\n{trim_text(d, MAX_CHARS_PER_DOC)}")
     context = "\n\n".join(ctx_lines)
+
     if ANSWER_ECHO_ONLY:
+        # Debug mode: just echo the first snippet
         snippet = trim_text(docs[0] if docs else "", 200)
         used = [{"id": ids[0], "text": docs[0], "metadata": metas[0]}] if ids else []
         return {"answer": snippet or "I don’t know based on the current knowledge.", "used": used}
+
+    # Constrained answering prompt; sentinel trimming avoids model ramble
     prompt = (
         "Answer ONLY about the specific subject asked.\n"
         "Use ONLY the provided context; if it doesn't contain the answer, say you don't know.\n"
@@ -534,7 +703,13 @@ def answer(req: AnswerRequest):
                 "prompt": prompt,
                 "stream": False,
                 "keep_alive": "1h",
-                "options": {"num_predict": MAX_PREDICT, "temperature": 0.2, "top_p": 0.9, "repeat_penalty": 1.1, "num_thread": os.cpu_count() or 4,},
+                "options": {
+                    "num_predict": MAX_PREDICT,
+                    "temperature": 0.2,
+                    "top_p": 0.9,
+                    "repeat_penalty": 1.1,
+                    "num_thread": os.cpu_count() or 4,
+                },
                 "stop": [STOP_SENTINEL],
             },
             timeout=OLLAMA_TIMEOUT,
@@ -549,6 +724,7 @@ def answer(req: AnswerRequest):
         raise HTTPException(status_code=502, detail=f"Ollama HTTP error: {e}")
     except ValueError as e:
         raise HTTPException(status_code=502, detail=f"Ollama returned non-JSON: {e}")
+
     used = [{"id": id_, "text": d, "metadata": m} for id_, d, m in zip(ids, docs, metas)]
     return {"answer": answer_text, "used": used}
 
@@ -556,6 +732,10 @@ def answer(req: AnswerRequest):
 # WS SENDER
 # =====================================================================
 async def _ws_sender(ws: WebSocket, q: asyncio.Queue):
+    """
+    Dedicated sender coroutine pulling JSON strings from a queue and
+    sending them over the WebSocket. Terminates when the socket closes.
+    """
     try:
         while True:
             msg = await q.get()
@@ -569,14 +749,19 @@ async def _ws_sender(ws: WebSocket, q: asyncio.Queue):
                 print(f"[WS][send_error] {e} — stopping sender")
                 break
     except asyncio.CancelledError:
+        # Normal shutdown path
         pass
 
 async def _background_summary_task(send_queue: asyncio.Queue, seg: str):
+    """
+    Run summarization for a segment and enqueue a 'summary_item' message
+    unless the model decides to SKIP the chunk.
+    """
     try:
         raw = await summarize_async(seg)
         out = (raw or "").strip()
 
-        # Skip handling
+        # Detect SKIP early to avoid emitting empty summaries
         first_line = ""
         for ln in out.splitlines():
             s = ln.strip()
@@ -586,6 +771,7 @@ async def _background_summary_task(send_queue: asyncio.Queue, seg: str):
         if not out or first_line.upper().startswith("SKIP"):
             return
 
+        # Parse a compact title + body from the model output
         lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
         title = "Summary"; text_lines = []
         if lines:
@@ -596,6 +782,7 @@ async def _background_summary_task(send_queue: asyncio.Queue, seg: str):
                 first = re.sub(r'^(?:[-*•]\s*|\d+[.)]\s*)', '', lines[0]).strip()
                 if first: title = first
                 text_lines = lines[1:]
+
         cleaned = [re.sub(r'^(?:[-*•]\s*|\d+[.)]\s*)', '', ln).strip() for ln in text_lines]
         text = "\n".join([ln for ln in cleaned if ln]) or title
         payload = {"summary_item": {"title": title, "text": text}}
@@ -608,17 +795,25 @@ async def _background_summary_task(send_queue: asyncio.Queue, seg: str):
 # WS AUDIO HANDLER
 # =====================================================================
 async def handle_audio_ws(websocket: WebSocket):
+    """
+    Main audio WebSocket handler.
+    Receives interleaved binary audio frames and optional text control frames.
+    Performs VAD-gated buffering, partial recognition, final ASR, live embedding,
+    and background summarization with bounded concurrency.
+    """
     print("[WS] connected")
     send_queue: asyncio.Queue = asyncio.Queue()
     sender_task = asyncio.create_task(_ws_sender(websocket, send_queue))
     bg_tasks: set[asyncio.Task] = set()
 
+    # Streaming state
     speaking = False
     last_voice = time.time()
     last_partial_t = 0.0
     last_partial_text = ""
     closing = False
 
+    # Overlap tail improves partial recognition continuity
     tail = np.zeros(int(OVERLAP_SEC * SAMPLE_RATE), dtype=np.int16)
     buf: List[np.ndarray] = []
 
@@ -626,14 +821,17 @@ async def handle_audio_ws(websocket: WebSocket):
     LISTENING_HINT_DELAY = 0.8
     listening_sent = False
 
+    # Rolling summarizer collects final ASR text and emits segments
     rolling = RollingSummarizer(
         threshold_chars=int(os.getenv("SUMMARY_CHUNK_CHARS", str(SUMMARY_CHUNK_CHARS))),
         fn=lambda s: s,
         cooldown_sec=0.5
     )
 
+    # Optional campaign scoping passed via query, header, or JSON frame
     campaign_id: Optional[str] = None
 
+    # Extract campaignId from query string if present
     try:
         qp = dict(websocket.query_params)
         if qp.get("campaignId"):
@@ -641,6 +839,8 @@ async def handle_audio_ws(websocket: WebSocket):
             print(f"[WS] campaign_id set via query -> {campaign_id}")
     except Exception:
         pass
+
+    # Extract campaignId from headers if present
     try:
         hdrs = getattr(websocket, "headers", None)
         if not campaign_id and hdrs:
@@ -652,12 +852,17 @@ async def handle_audio_ws(websocket: WebSocket):
         pass
 
     async def _flush_and_finish(reason: str):
+        """
+        Final drain of rolling summary and background tasks,
+        then notify the client that the session ended.
+        """
         leftover = rolling.flush().strip()
         if leftover:
             task = asyncio.create_task(_background_summary_task(send_queue, leftover))
             bg_tasks.add(task)
             task.add_done_callback(lambda t, s=bg_tasks: s.discard(t))
 
+        # Wait briefly for any pending summaries, then cancel the rest
         try:
             await asyncio.wait_for(asyncio.gather(*bg_tasks, return_exceptions=True), timeout=SUMMARY_DRAIN_TIMEOUT)
         except asyncio.TimeoutError:
@@ -671,8 +876,13 @@ async def handle_audio_ws(websocket: WebSocket):
             pass
 
     async def _finalize_current_utter(reason: str = "silence"):
+        """
+        Convert the buffered PCM into text, send a 'final' message,
+        push the text into Chroma, and schedule summarization of segments.
+        """
         nonlocal speaking, tail, buf, last_partial_text, last_partial_t
         try:
+            # Concatenate overlap tail with buffered frames to form the utterance
             utter = np.concatenate([tail, *buf]) if buf else tail
             wave = utter.astype(np.float32) / 32768.0
             final_text = transcribe_float32(wave)
@@ -682,7 +892,7 @@ async def handle_audio_ws(websocket: WebSocket):
                 if not closing:
                     await send_queue.put(json.dumps({"final": final_text}))
 
-                # embed live chunk
+                # Live embedding of recognized text for immediate retrieval
                 try:
                     ensure_collection()
                     doc_id = f"live_{int(time.time()*1000)}"
@@ -692,7 +902,7 @@ async def handle_audio_ws(websocket: WebSocket):
                 except Exception as e:
                     print(f"[Embed] failed to add live chunk: {e}")
 
-                # schedule summaries 
+                # Schedule summarization tasks for emitted segments
                 segments = rolling.push(final_text)
                 if isinstance(segments, str):
                     segments = [segments] if segments else []
@@ -706,7 +916,7 @@ async def handle_audio_ws(websocket: WebSocket):
                     bg_tasks.add(task)
                     task.add_done_callback(lambda t, s=bg_tasks: s.discard(t))
 
-                # optional force flush small remainder
+                # Optionally flush small remainder so UI doesn't wait too long
                 if (not segments) and SUMMARY_FORCE_FLUSH_AFTER_FINAL:
                     small = rolling.flush()
                     if small and len(small) >= SUMMARY_MIN_FLUSH_CHARS:
@@ -714,6 +924,7 @@ async def handle_audio_ws(websocket: WebSocket):
                         bg_tasks.add(task)
                         task.add_done_callback(lambda t, s=bg_tasks: s.discard(t))
                     elif small:
+                        # Keep the tiny remainder for future accumulation
                         try:
                             rolling._buf = [small]
                         except Exception:
@@ -721,7 +932,7 @@ async def handle_audio_ws(websocket: WebSocket):
         except Exception as e:
             print(f"[WS] _finalize_current_utter failed: {e}")
         finally:
-            # update overlap tail; reset buffers
+            # Update overlap window and reset accumulators
             utter = np.concatenate([tail, *buf]) if buf else tail
             if utter.size >= tail.size:
                 tail = utter[-tail.size:].copy()
@@ -733,10 +944,12 @@ async def handle_audio_ws(websocket: WebSocket):
             last_partial_t = now()
             speaking = False
 
+    # Measure per-utterance time to enforce MAX_UTTER_SEC
     utter_start_t: Optional[float] = None
 
     try:
         while True:
+            # Receive either control text or binary audio with idle timeout
             try:
                 msg = await asyncio.wait_for(websocket.receive(), timeout=SESSION_IDLE_SEC)
             except asyncio.TimeoutError:
@@ -746,10 +959,12 @@ async def handle_audio_ws(websocket: WebSocket):
                     await websocket.close()
                 break
 
+            # Handle text control frames
             if "text" in msg and msg["text"] is not None:
                 text_frame = (msg["text"] or "").strip()
                 if text_frame:
                     print(f"[WS] text frame: {text_frame[:160]}")
+                # Simple JSON protocol for setting campaign
                 try:
                     obj = json.loads(text_frame)
                     if isinstance(obj, dict):
@@ -767,18 +982,23 @@ async def handle_audio_ws(websocket: WebSocket):
                 except Exception:
                     pass
 
+                # Special terminator for client-driven close
                 if text_frame == "__END__":
                     await _flush_and_finish("__END__")
                     closing = True
                     break
 
-                continue
+                continue  # Ignore other text frames
 
+            # Guard against non-binary messages
             if "bytes" not in msg or msg["bytes"] is None:
                 continue
+
+            # Decode raw PCM16 from the binary frame
             message = msg["bytes"]
             pcm16 = np.frombuffer(message, dtype=np.int16)
 
+            # VAD branch: accumulate speech or send listening hint
             if is_speech_int16(pcm16):
                 if not speaking:
                     speaking = True
@@ -788,6 +1008,7 @@ async def handle_audio_ws(websocket: WebSocket):
                 last_voice = now()
                 buf.append(pcm16)
 
+                # Periodic partial recognition for UX responsiveness
                 if now() - last_partial_t >= PARTIAL_INTERVAL:
                     chunk = np.concatenate([tail, *buf]) if buf else tail
                     wave = chunk.astype(np.float32) / 32768.0
@@ -803,6 +1024,7 @@ async def handle_audio_ws(websocket: WebSocket):
                     last_partial_t = now()
 
             else:
+                # If quiet for a short time and not speaking, send a passive hint
                 if (not speaking) and (now() - last_voice >= LISTENING_HINT_DELAY) and (not listening_sent):
                     if not closing:
                         try:
@@ -811,10 +1033,11 @@ async def handle_audio_ws(websocket: WebSocket):
                             pass
                     listening_sent = True
 
+                # If currently speaking, detect end of utterance by silence window
                 if speaking and (now() - last_voice) * 1000 >= SILENCE_END_MS:
                     await _finalize_current_utter("silence")
 
-            # hard limit per-utterance; force finalization immediately
+            # Hard timeout to prevent unbounded buffers on very long speech
             if speaking and utter_start_t and (now() - utter_start_t) >= MAX_UTTER_SEC:
                 print(f"[ForceFinal] {MAX_UTTER_SEC}s reached — forcing final")
                 await _finalize_current_utter("timeout")
@@ -823,6 +1046,7 @@ async def handle_audio_ws(websocket: WebSocket):
             await asyncio.sleep(0)
 
     except WebSocketDisconnect:
+        # Normal client disconnect; drain summaries and stop sender
         print("[WS] disconnected")
         try:
             leftover = rolling.flush().strip()
@@ -845,6 +1069,7 @@ async def handle_audio_ws(websocket: WebSocket):
             return
 
     except Exception as e:
+        # Any unexpected error: cancel background work and stop sender cleanly
         print("[WS] error:", e)
         for t in list(bg_tasks):
             t.cancel()
@@ -857,6 +1082,10 @@ async def handle_audio_ws(websocket: WebSocket):
 
 @app.websocket("/audio")
 async def ws_audio_legacy(websocket: WebSocket):
+    """
+    WebSocket endpoint for audio streaming.
+    Kept as a thin wrapper to allow reuse of handle_audio_ws.
+    """
     await websocket.accept()
     await handle_audio_ws(websocket)
 
@@ -865,13 +1094,23 @@ async def ws_audio_legacy(websocket: WebSocket):
 # =====================================================================
 @app.post("/transcribe")
 async def transcribe(file: UploadFile = File(...)):
+    """
+    Transcribe an uploaded audio file.
+    Uses a NamedTemporaryFile to store the upload, then runs faster-whisper.
+    """
     tmp_path = None
     try:
         suffix = os.path.splitext(file.filename or "")[1] or ".wav"
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp.write(await file.read())
             tmp_path = tmp.name
-        segs, _ = whisper.transcribe(tmp_path, language=LANG, beam_size=BEAM, vad_filter=True, vad_parameters=dict(min_silence_duration_ms=500))
+        segs, _ = whisper.transcribe(
+            tmp_path,
+            language=LANG,
+            beam_size=BEAM,
+            vad_filter=True,
+            vad_parameters=dict(min_silence_duration_ms=500)
+        )
         text = " ".join(s.text for s in segs).strip()
         return {"text": text}
     except Exception as e:
@@ -885,5 +1124,9 @@ async def transcribe(file: UploadFile = File(...)):
 # ENTRYPOINT
 # =====================================================================
 if __name__ == "__main__":
+    """
+    Start the FastAPI app under Uvicorn.
+    reload=False because the global clients are not reload-safe by default.
+    """
     os.makedirs(DB_PATH, exist_ok=True)
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")), reload=False)
