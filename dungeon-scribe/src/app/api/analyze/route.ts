@@ -28,6 +28,35 @@ type AnalyzeBody = {
   }>; // optional client-provided character list
 };
 
+function blocksFromCard(c: {
+  name: string;
+  role?: string;
+  affiliation?: string;
+  traits?: string[];
+  goals?: string[];
+  lastLocation?: string;
+  status?: string;
+  notes?: string;
+}): string {
+  const blocks: string[] = [];
+  const push = (title: string, value?: string | string[]) => {
+    if (!value) return;
+    const v = Array.isArray(value) ? value.join(", ") : String(value).trim();
+    if (v) blocks.push(`${title}\n${v}`);
+  };
+
+  push("Role", c.role);
+  push("Affiliation", c.affiliation);
+  push("Traits", c.traits ?? []);
+  // Goals: keep semicolons between items in display
+  push("Goals", (c.goals ?? []).join("; "));
+  push("Last location", c.lastLocation);
+  push("Status", c.status);
+  push("Notes", c.notes);
+
+  return blocks.length ? blocks.join("\n\n") : c.name;
+}
+
 /**
  * POST /api/analyze
  *
@@ -156,25 +185,22 @@ export async function POST(req: Request) {
     const createdCharacterSummaries: Array<{ id: string; name: string }> = [];
     for (const card of characters) {
       try {
-        const lines: string[] = [];
-        if ((card as any).role) lines.push(`• Role: ${(card as any).role}`);
-        if ((card as any).affiliation)
-          lines.push(`• Affiliation: ${(card as any).affiliation}`);
-        if ((card as any).traits?.length)
-          lines.push(`• Traits: ${(card as any).traits.join(", ")}`);
-        if ((card as any).goals?.length)
-          lines.push(`• Goals: ${(card as any).goals.join("; ")}`);
-        if ((card as any).lastLocation)
-          lines.push(`• Last location: ${(card as any).lastLocation}`);
-        if ((card as any).status)
-          lines.push(`• Status: ${(card as any).status}`);
-        if ((card as any).notes) lines.push(`• Notes: ${(card as any).notes}`);
+        const content = blocksFromCard({
+          name: (card as any).name,
+          role: (card as any).role,
+          affiliation: (card as any).affiliation,
+          traits: (card as any).traits ?? [],
+          goals: (card as any).goals ?? [],
+          lastLocation: (card as any).lastLocation,
+          status: (card as any).status,
+          notes: (card as any).notes,
+        });
 
         const row = await prisma.summary.create({
           data: {
             type: SummaryType.character,
             roleName: (card as any).name,
-            content: lines.join("\n") || `• ${(card as any).name}`,
+            content,            // <-- new block-format
             campaignId: campaign.id,
           },
         });
