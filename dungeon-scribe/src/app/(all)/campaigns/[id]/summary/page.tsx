@@ -295,7 +295,10 @@ export default function SummaryPage() {
                   pointerEvents: "auto",
                 }}
               >
-                <CharacterCarouselStacked searchName={charSearchKey} campaignIdProp={campaignId} />
+                <CharacterCarouselStacked
+                  searchName={charSearchKey}
+                  campaignIdProp={campaignId}
+                />
               </div>
             )}
           </section>
@@ -357,7 +360,8 @@ function CardOnPaper({ campaignId }: { campaignId?: string | null }) {
         if (camp) {
           // Wire visible title and update date to campaign data
           if (camp.title) setTitle(camp.title);
-          if (camp.updateDate) setDate(new Date(camp.updateDate).toLocaleString());
+          if (camp.updateDate)
+            setDate(new Date(camp.updateDate).toLocaleString());
 
           // Check if History asked us to open a specific summary id
           let handled = false;
@@ -383,9 +387,13 @@ function CardOnPaper({ campaignId }: { campaignId?: string | null }) {
           }
 
           if (!handled) {
-            if (Array.isArray(camp.sessionSummaries) && camp.sessionSummaries.length > 0) {
+            if (
+              Array.isArray(camp.sessionSummaries) &&
+              camp.sessionSummaries.length > 0
+            ) {
               // Use the most recent session summary
-              const latest = camp.sessionSummaries[camp.sessionSummaries.length - 1];
+              const latest =
+                camp.sessionSummaries[camp.sessionSummaries.length - 1];
               setSummary(latest.content || initialSummary);
               setSummaryId(latest.id || null);
             } else {
@@ -505,66 +513,101 @@ function CardOnPaper({ campaignId }: { campaignId?: string | null }) {
             {editable ? (
               <>
                 <textarea
-                  value={summary}
+                  value={summary ?? ""}
                   onChange={(e) => setSummary(e.target.value)}
-                  className="w-full h-[160px] bg-white p-3 rounded-md border border-gray-300 text-[#333] font-sans text-[16px] leading-[1.6] resize-none focus:outline-none focus:ring-2 focus:ring-[#A43718]"
+                  className="w-full bg-white p-3 rounded-md border border-gray-300 text-[#333] font-sans text-[16px] leading-[1.6] resize-none focus:outline-none focus:ring-2 focus:ring-[#A43718]"
+                  style={{
+                    minHeight: "160px",
+                    maxHeight: "400px",
+                    height: "auto",
+                    overflowY: "auto",
+                  }}
+                  // 基于换行数动态设置行数，最少 10 行；对 undefined 做了保护
+                  rows={Math.max(10, (summary ?? "").split("\n").length)}
                 />
                 <div className="flex justify-end mt-3">
                   <button
                     onClick={async () => {
-                          if (!campaignId) {
-                            alert("No campaign selected to save summary to.");
+                      // ==== 你的“保存逻辑”保持不变（原样搬运） ====
+                      if (!campaignId) {
+                        alert("No campaign selected to save summary to.");
+                        return;
+                      }
+
+                      console.log("Saving summary", {
+                        campaignId,
+                        summaryId,
+                        length: (summary ?? "").length,
+                      });
+
+                      try {
+                        // Pre-check: ensure campaign exists on server to avoid 404
+                        const listRes = await fetch("/api/data");
+                        if (!listRes.ok) {
+                          console.warn(
+                            "Failed to fetch campaigns before save",
+                            listRes.status
+                          );
+                        } else {
+                          const listJson = await listRes
+                            .json()
+                            .catch(() => ({}));
+                          const campaigns = listJson?.campaigns || [];
+                          const found = campaigns.find(
+                            (c: any) => c.id === campaignId
+                          );
+                          if (!found) {
+                            const msg = `Campaign with id ${campaignId} not found on server.`;
+                            console.error(msg, {
+                              available: campaigns.map((c: any) => c.id),
+                            });
+                            alert(msg);
                             return;
                           }
+                        }
 
-                          console.log("Saving summary", { campaignId, summaryId, length: summary?.length });
+                        const res = await fetch(`/api/data?type=summary`, {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({
+                            campaignId,
+                            content: summary ?? "",
+                            summaryId,
+                          }),
+                        });
 
-                          try {
-                            // Pre-check: ensure campaign exists on server to avoid 404
-                            const listRes = await fetch("/api/data");
-                            if (!listRes.ok) {
-                              console.warn("Failed to fetch campaigns before save", listRes.status);
-                            } else {
-                              const listJson = await listRes.json().catch(() => ({}));
-                              const campaigns = listJson?.campaigns || [];
-                              const found = campaigns.find((c: any) => c.id === campaignId);
-                              if (!found) {
-                                const msg = `Campaign with id ${campaignId} not found on server.`;
-                                console.error(msg, { available: campaigns.map((c: any) => c.id) });
-                                alert(msg);
-                                return;
-                              }
-                            }
+                        const body = await res.text();
+                        let parsed: any = null;
+                        try {
+                          parsed = JSON.parse(body);
+                        } catch {}
 
-                            const res = await fetch(`/api/data?type=summary`, {
-                              method: "POST",
-                              headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify({ campaignId, content: summary, summaryId }),
-                            });
+                        if (!res.ok) {
+                          const errMsg =
+                            (parsed && parsed.error) ||
+                            `Save failed (status ${res.status})`;
+                          console.error("Save failed", {
+                            status: res.status,
+                            body: parsed || body,
+                          });
+                          throw new Error(errMsg);
+                        }
 
-                            const body = await res.text();
-                            let parsed: any = null;
-                            try {
-                              parsed = JSON.parse(body);
-                            } catch {}
-
-                            if (!res.ok) {
-                              const errMsg = (parsed && parsed.error) || `Save failed (status ${res.status})`;
-                              console.error("Save failed", { status: res.status, body: parsed || body });
-                              throw new Error(errMsg);
-                            }
-
-                            const json = parsed || {};
-                            if (json?.summary?.content) setSummary(json.summary.content);
-                            if (json?.summary?.id) setSummaryId(json.summary.id);
-                            // If server returned campaign updateDate, refresh displayed date
-                            if (json?.campaign?.updateDate) setDate(new Date(json.campaign.updateDate).toLocaleString());
-                            setEditable(false);
-                          } catch (e: any) {
-                            console.error("Failed to save summary:", e);
-                            alert(e?.message || "Failed to save summary");
-                          }
-                        }}
+                        const json = parsed || {};
+                        if (json?.summary?.content)
+                          setSummary(json.summary.content);
+                        if (json?.summary?.id) setSummaryId(json.summary.id);
+                        if (json?.campaign?.updateDate)
+                          setDate(
+                            new Date(json.campaign.updateDate).toLocaleString()
+                          );
+                        setEditable(false);
+                      } catch (e: any) {
+                        console.error("Failed to save summary:", e);
+                        alert(e?.message || "Failed to save summary");
+                      }
+                      // ==== 以上为原逻辑 ====
+                    }}
                     className="px-4 py-2 bg-[#A43718] text-white rounded-md hover:opacity-90 active:scale-95 transition"
                   >
                     Save

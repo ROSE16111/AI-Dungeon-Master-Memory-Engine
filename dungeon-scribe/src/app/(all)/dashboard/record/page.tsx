@@ -12,7 +12,7 @@ import { useRouter, useParams } from "next/navigation";
 import { useTranscript } from "../../../context/TranscriptContext";
 import { ragAnswer } from "@/lib/ragClient";
 type CharItem = { name: string; img: string; details: string };
-import type { Variants } from "framer-motion"
+import type { Variants } from "framer-motion";
 
 // lock <body>
 function useLockBodyScroll() {
@@ -197,12 +197,11 @@ async function endStreamAndWait(): Promise<void> {
   });
 
   try {
-    ws.send("__END__");         // <-- send the TEXT frame the server looks for
+    ws.send("__END__"); // <-- send the TEXT frame the server looks for
   } catch {}
 
-  await ended;                  // <-- wait for drain + ack
+  await ended; // <-- wait for drain + ack
 }
-
 
 // Sessions / Characters
 function TitleWithFilter({
@@ -785,9 +784,8 @@ function SessionsInsidePaper({
 }) {
   const { summary } = useTranscript();
 
-  const raw = summary || `(demo summary)Arrival in Town`;
+  const raw = summary || `No content yet`;
 
-  // 解析为 {title, body} 数组；后续可直接换成接口返回的数据
   type Block = { title: string; body: string };
   const blocks: Block[] = raw
     .trim()
@@ -800,58 +798,28 @@ function SessionsInsidePaper({
       };
     });
 
-  // === search: count hits, highlight, and jump to active hit ===
-  const hitRefs = useRef<Array<HTMLSpanElement | null>>([]);
-  hitRefs.current = []; // rebuild on each render
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const trackRef = useRef<HTMLDivElement>(null);
+  const thumbRef = useRef<HTMLDivElement>(null);
+
+  const [thumbTop, setThumbTop] = useState(0);
+  const [thumbH, setThumbH] = useState(46);
+  const [dragging, setDragging] = useState(false);
+  const dragOffsetRef = useRef(0);
+  const sizesRef = useRef({ trackH: 1, maxThumbTop: 1, maxScrollTop: 1 });
+
+  const SCROLLBAR = { width: 12, gap: 10 };
+  const SAFE = { left: 22, right: 22, top: 1, bottom: 25 };
+  const contentBox = {
+    left: 67.86 + SAFE.left,
+    top: 24 + SAFE.top,
+    width: 867 - SAFE.left - SAFE.right,
+    height: 540 - SAFE.top - SAFE.bottom,
+  };
 
   const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const MAX_HITS = 500;
 
-  // 根据 activeHit 定位到对应命中（滚动到视窗中央）
-  // 当搜索词变化后：下一帧统计并滚到第一个命中
-  useEffect(() => {
-    const vp = viewportRef.current;
-    if (!vp) {
-      onHitCount(0);
-      return;
-    }
-    requestAnimationFrame(() => {
-      const hits = vp.querySelectorAll<HTMLElement>("mark.search-hit");
-      onHitCount(hits.length);
-      if (searchTerm && hits.length > 0) {
-        const el = hits[0]!;
-        const offset =
-          el.getBoundingClientRect().top - vp.getBoundingClientRect().top;
-        vp.scrollBy({ top: offset - 40, behavior: "smooth" });
-      }
-    });
-  }, [searchTerm]);
-
-  // 当 activeHit 或 searchTerm 变化：切换“当前命中”样式并滚动定位
-  useEffect(() => {
-    const vp = viewportRef.current;
-    if (!vp) return;
-
-    const hits = vp.querySelectorAll<HTMLElement>("mark.search-hit");
-    hits.forEach((h) => h.classList.remove("search-hit--active"));
-    if (!hits.length) return;
-
-    const idx = Math.max(0, Math.min(activeHit, hits.length - 1));
-    const el = hits[idx]!;
-    el.classList.add("search-hit--active");
-
-    const vpRect = vp.getBoundingClientRect();
-    const elRect = el.getBoundingClientRect();
-    const top = elRect.top - vpRect.top;
-    if (top < 60 || top > vp.clientHeight - 80) {
-      vp.scrollBy({
-        top: top - vp.clientHeight / 2 + elRect.height / 2,
-        behavior: "smooth",
-      });
-    }
-  }, [activeHit, searchTerm]);
-
-  // 渲染时把命中包一层 <mark>
-  // 替换 renderHighlighted，给每个命中标 <mark className="search-hit" data-hit={序号}>
   function renderHighlighted(text: string) {
     if (!searchTerm?.trim()) return text;
     const re = new RegExp(escapeRegExp(searchTerm), "gi");
@@ -859,7 +827,9 @@ function SessionsInsidePaper({
     let last = 0,
       idx = 0,
       m: RegExpExecArray | null;
+
     while ((m = re.exec(text)) !== null) {
+      if (idx >= MAX_HITS) break;
       const start = m.index,
         end = start + m[0].length;
       if (start > last) nodes.push(text.slice(last, start));
@@ -883,49 +853,51 @@ function SessionsInsidePaper({
     return nodes;
   }
 
-  // 纸内“安全区”：在原始可视区域基础上四周内缩，避免文字或滚动条压到破边
-  const SAFE = { left: 22, right: 22, top: 1, bottom: 25 };
-  const contentBox = {
-    left: 67.86 + SAFE.left,
-    top: 24 + SAFE.top,
-    width: 867 - SAFE.left - SAFE.right,
-    height: 540 - SAFE.top - SAFE.bottom,
-  };
-
-  // 自定义滚动条（轨道 + 拖拽的滑块）
-  const viewportRef = useRef<HTMLDivElement>(null);
-  const trackRef = useRef<HTMLDivElement>(null);
-  const [thumbTop, setThumbTop] = useState(0);
-  const [thumbH, setThumbH] = useState(46);
-  const [dragging, setDragging] = useState(false);
-  const dragOffsetRef = useRef(0);
-  const sizesRef = useRef({ trackH: 1, maxThumbTop: 1, maxScrollTop: 1 });
-  const SCROLLBAR = { width: 12, gap: 10 };
-
-  // —— 尺寸与位置重算（内容变化/窗口变化/滚动时触发） —— //
+  // --- recalc with rAF debounce + only update when changed ---
+  let recalcRaf = 0;
   const recalc = () => {
-    const vp = viewportRef.current,
-      track = trackRef.current;
-    if (!vp || !track) return;
-    const contentH = vp.scrollHeight,
-      viewH = vp.clientHeight,
-      trackH = track.clientHeight;
-    const minThumb = 30; // 最小拇指高度，避免太短
-    const tH = Math.max(minThumb, (viewH / Math.max(contentH, 1)) * trackH);
-    const maxThumbTop = Math.max(trackH - tH, 0);
-    const maxScrollTop = Math.max(contentH - viewH, 1);
-    const tTop = (vp.scrollTop / maxScrollTop) * maxThumbTop;
-    sizesRef.current = { trackH, maxThumbTop, maxScrollTop };
-    setThumbH(tH);
-    setThumbTop(Number.isFinite(tTop) ? tTop : 0);
+    cancelAnimationFrame(recalcRaf);
+    recalcRaf = requestAnimationFrame(() => {
+      const vp = viewportRef.current,
+        track = trackRef.current;
+      if (!vp || !track) return;
+      const contentH = vp.scrollHeight,
+        viewH = vp.clientHeight,
+        trackH = track.clientHeight;
+      const minThumb = 48; // 提升最小高度以改善长文手感
+      const tH = Math.max(minThumb, (viewH / Math.max(contentH, 1)) * trackH);
+      const maxThumbTop = Math.max(trackH - tH, 0);
+      const maxScrollTop = Math.max(contentH - viewH, 1);
+      const tTop =
+        (vp.scrollTop / Math.max(1, maxScrollTop)) * Math.max(0, maxThumbTop);
+
+      sizesRef.current = { trackH, maxThumbTop, maxScrollTop };
+
+      setThumbH((prev) => (Math.abs(prev - tH) > 0.5 ? tH : prev));
+      setThumbTop((prev) =>
+        Number.isFinite(tTop) && Math.abs(prev - tTop) > 0.5 ? tTop : prev
+      );
+
+      if (thumbRef.current) {
+        thumbRef.current.style.top = `${Number.isFinite(tTop) ? tTop : 0}px`;
+      }
+    });
   };
 
+  // --- viewport scroll → rAF sync thumb (no setState in hot path) ---
+  let scrollRaf = 0;
   const onViewportScroll = () => {
     const vp = viewportRef.current;
     if (!vp) return;
-    const { maxThumbTop, maxScrollTop } = sizesRef.current;
-    const t = (vp.scrollTop / maxScrollTop) * maxThumbTop; // 拇指随内容滚动
-    setThumbTop(Number.isFinite(t) ? t : 0);
+    cancelAnimationFrame(scrollRaf);
+    scrollRaf = requestAnimationFrame(() => {
+      const { maxThumbTop, maxScrollTop } = sizesRef.current;
+      const t =
+        (vp.scrollTop / Math.max(1, maxScrollTop)) * Math.max(0, maxThumbTop);
+      if (thumbRef.current) {
+        thumbRef.current.style.top = `${Number.isFinite(t) ? t : 0}px`;
+      }
+    });
   };
 
   const onTrackClick: React.MouseEventHandler<HTMLDivElement> = (e) => {
@@ -935,18 +907,18 @@ function SessionsInsidePaper({
     const rect = track.getBoundingClientRect();
     const y = e.clientY - rect.top;
     const { maxThumbTop, maxScrollTop } = sizesRef.current;
-    const target = Math.min(Math.max(y - thumbH / 2, 0), maxThumbTop); // 点击轨道跳转
-    vp.scrollTop = (target / Math.max(1, maxThumbTop)) * maxScrollTop;
+    const target = Math.min(Math.max(y - thumbH / 2, 0), maxThumbTop);
+    const ratio = target / Math.max(1, maxThumbTop);
+    vp.scrollTop = ratio * maxScrollTop;
   };
 
   const onThumbMouseDown: React.MouseEventHandler<HTMLDivElement> = (e) => {
     e.preventDefault();
     const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
-    dragOffsetRef.current = e.clientY - rect.top; // 记录按下位置与拇指顶部的偏移
+    dragOffsetRef.current = e.clientY - rect.top;
     setDragging(true);
   };
 
-  // —— 处理拇指拖拽 —— //
   useEffect(() => {
     if (!dragging) return;
     const onMove = (e: MouseEvent) => {
@@ -957,9 +929,11 @@ function SessionsInsidePaper({
       const y = e.clientY - rect.top - dragOffsetRef.current;
       const { maxThumbTop, maxScrollTop } = sizesRef.current;
       const clamped = Math.min(Math.max(y, 0), maxThumbTop);
-      setThumbTop(clamped);
       const ratio = clamped / Math.max(1, maxThumbTop);
-      vp.scrollTop = ratio * maxScrollTop; // 反向驱动内容滚动
+      vp.scrollTop = ratio * maxScrollTop;
+      if (thumbRef.current) {
+        thumbRef.current.style.top = `${clamped}px`;
+      }
     };
     const onUp = () => setDragging(false);
     window.addEventListener("mousemove", onMove);
@@ -970,7 +944,6 @@ function SessionsInsidePaper({
     };
   }, [dragging]);
 
-  // —— 初始化与监听：尺寸变化 / 视口变化时重算拇指 —— //
   useEffect(() => {
     recalc();
     const ro = new ResizeObserver(recalc);
@@ -981,120 +954,189 @@ function SessionsInsidePaper({
     return () => {
       ro.disconnect();
       window.removeEventListener("resize", onR);
+      cancelAnimationFrame(recalcRaf);
+      cancelAnimationFrame(scrollRaf);
     };
   }, []);
 
+  // --- search: count hits and auto-jump to first on term change ---
+  useEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp) {
+      onHitCount(0);
+      return;
+    }
+    requestAnimationFrame(() => {
+      const hits = vp.querySelectorAll<HTMLElement>("mark.search-hit");
+      onHitCount(hits.length);
+      if (searchTerm && hits.length > 0) {
+        const el = hits[0]!;
+        const offset =
+          el.getBoundingClientRect().top - vp.getBoundingClientRect().top;
+        vp.scrollBy({ top: offset - 40, behavior: "smooth" });
+      }
+    });
+  }, [searchTerm, onHitCount]);
+
+  // --- when activeHit changes, center it if needed ---
+  useEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+    const hits = vp.querySelectorAll<HTMLElement>("mark.search-hit");
+    hits.forEach((h) => h.classList.remove("search-hit--active"));
+    if (!hits.length) return;
+
+    const idx = Math.max(0, Math.min(activeHit, hits.length - 1));
+    const el = hits[idx]!;
+    el.classList.add("search-hit--active");
+
+    const vpRect = vp.getBoundingClientRect();
+    const elRect = el.getBoundingClientRect();
+    const top = elRect.top - vpRect.top;
+    if (top < 60 || top > vp.clientHeight - 80) {
+      vp.scrollBy({
+        top: top - vp.clientHeight / 2 + elRect.height / 2,
+        behavior: "smooth",
+      });
+    }
+  }, [activeHit, searchTerm]);
+
+  const heavy = blocks.length > 600 || (summary?.length ?? 0) > 200_000; // 超大文本时可关闭遮罩
+
   return (
     <>
+      {/* 捕获纸外滚轮并导入纸内视口，解决 body 锁滚导致的“滚不动” */}
       <div
         className="absolute"
-        style={{ ...contentBox, zIndex: 2, pointerEvents: "auto" }}
+        style={{
+          left: 67.86,
+          top: 24,
+          width: 867,
+          height: 540,
+          zIndex: 2,
+          pointerEvents: "auto",
+        }}
+        onWheel={(e) => {
+          const vp = viewportRef.current;
+          if (!vp) return;
+          e.preventDefault();
+          vp.scrollBy({ top: e.deltaY, behavior: "auto" });
+        }}
       >
-        {/* 真正滚动区：隐藏系统滚动条；PageDown/空格只在纸内生效 */}
         <div
-          id="sessionViewport"
-          ref={viewportRef}
-          onScroll={onViewportScroll}
-          className="absolute overflow-y-auto"
-          style={{
-            inset: 0,
-            padding: "6px 8px 12px 12px",
-            paddingRight: SCROLLBAR.width + SCROLLBAR.gap + 8, // 给自定义滚动条让位
-            fontFamily: '"Inter", sans-serif',
-            fontWeight: 700,
-            fontSize: 20,
-            lineHeight: "40px",
-            color: "#000",
-            WebkitOverflowScrolling: "touch",
-            overscrollBehavior: "contain", // 阻止滚动传导到整个页面
-            scrollbarWidth: "none",
-            msOverflowStyle: "none", // 隐藏系统滚动条（Firefox/旧 Edge）
-            touchAction: "pan-y", // 限制触控手势为纵向
-          }}
-          tabIndex={0}
-          onKeyDown={(e) => {
-            const vp = viewportRef.current;
-            if (!vp) return;
-            const page = vp.clientHeight - 40; // “一页”的步长（保留 40px 重叠）
-            if (["PageDown", "PageUp", " "].includes(e.key)) e.preventDefault();
-            if (e.key === "PageDown" || e.key === " ")
-              vp.scrollBy({ top: page, behavior: "smooth" });
-            if (e.key === "PageUp")
-              vp.scrollBy({ top: -page, behavior: "smooth" });
-          }}
+          className="absolute"
+          style={{ ...contentBox, zIndex: 2, pointerEvents: "auto" }}
         >
-          {/* 顶/底渐隐，营造“从纸里冒出”的视觉 */}
           <div
+            id="sessionViewport"
+            ref={viewportRef}
+            onScroll={onViewportScroll}
+            className="absolute overflow-y-auto"
             style={{
-              WebkitMaskImage:
-                "linear-gradient(to bottom, transparent 0, black 20px, black calc(100% - 20px), transparent 100%)",
-              maskImage:
-                "linear-gradient(to bottom, transparent 0, black 20px, black calc(100% - 20px), transparent 100%)",
+              inset: 0,
+              padding: "6px 8px 12px 12px",
+              paddingRight: SCROLLBAR.width + SCROLLBAR.gap + 8,
+              fontFamily: '"Inter", sans-serif',
+              fontWeight: 700,
+              fontSize: 20,
+              lineHeight: "40px",
+              color: "#000",
+              WebkitOverflowScrolling: "touch",
+              overscrollBehavior: "contain",
+              scrollbarWidth: "none",
+              msOverflowStyle: "none",
+              touchAction: "pan-y",
+            }}
+            tabIndex={0}
+            onKeyDown={(e) => {
+              const vp = viewportRef.current;
+              if (!vp) return;
+              const page = vp.clientHeight - 40;
+              if (["PageDown", "PageUp", " "].includes(e.key))
+                e.preventDefault();
+              if (e.key === "PageDown" || e.key === " ")
+                vp.scrollBy({ top: page, behavior: "smooth" });
+              if (e.key === "PageUp")
+                vp.scrollBy({ top: -page, behavior: "smooth" });
             }}
           >
-            {blocks.map((blk, i) => (
-              <div key={i} className="mb-4">
-                <div className="flex items-start gap-2">
-                  <img
-                    src="/dragon.png"
-                    alt=""
-                    style={{ width: 26, height: 26, marginTop: 6 }}
-                    onError={(e) =>
-                      ((e.target as HTMLImageElement).style.display = "none")
+            <div
+              style={
+                heavy
+                  ? undefined
+                  : {
+                      WebkitMaskImage:
+                        "linear-gradient(to bottom, transparent 0, black 20px, black calc(100% - 20px), transparent 100%)",
+                      maskImage:
+                        "linear-gradient(to bottom, transparent 0, black 20px, black calc(100% - 20px), transparent 100%)",
                     }
-                  />
-                  <div className="font-extrabold">
-                    {renderHighlighted(blk.title)}
+              }
+            >
+              {blocks.map((blk, i) => (
+                <div key={i} className="mb-4">
+                  <div className="flex items-start gap-2">
+                    <img
+                      src="/dragon.png"
+                      alt=""
+                      style={{ width: 26, height: 26, marginTop: 6 }}
+                      onError={(e) =>
+                        ((e.target as HTMLImageElement).style.display = "none")
+                      }
+                    />
+                    <div className="font-extrabold">
+                      {renderHighlighted(blk.title)}
+                    </div>
                   </div>
+                  {blk.body && (
+                    <div className="whitespace-pre-wrap mt-1">
+                      {renderHighlighted(blk.body)}
+                    </div>
+                  )}
                 </div>
-                {blk.body && (
-                  <div className="whitespace-pre-wrap mt-1">
-                    {renderHighlighted(blk.body)}
-                  </div>
-                )}
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
-        </div>
 
-        {/* 自定义滚动条（完全在安全区内，受纸外层 overflow:hidden 裁剪） */}
-        <div
-          ref={trackRef}
-          onMouseDown={(e) => {
-            if ((e.target as HTMLElement).dataset.role !== "thumb")
-              onTrackClick(e);
-          }}
-          className="absolute"
-          style={{
-            right: SCROLLBAR.gap,
-            top: 10,
-            bottom: 10,
-            width: SCROLLBAR.width,
-            borderRadius: 10,
-            background: "rgba(0,0,0,0.18)",
-            boxShadow: "inset 0 0 0 1px rgba(0,0,0,0.08)",
-            cursor: "pointer",
-          }}
-        >
+          {/* 自定义滚动条 */}
           <div
-            data-role="thumb"
-            onMouseDown={onThumbMouseDown}
-            className="absolute left-1/2 -translate-x-1/2"
-            style={{
-              top: `${thumbTop}px`,
-              width: SCROLLBAR.width - 4,
-              height: `${thumbH}px`,
-              borderRadius: 8,
-              background: "rgba(61,35,4,0.75)",
-              boxShadow: "inset 0 0 0 2px rgba(255,255,255,0.5)",
-              cursor: dragging ? "grabbing" : "grab",
+            ref={trackRef}
+            onMouseDown={(e) => {
+              if ((e.target as HTMLElement).dataset.role !== "thumb")
+                onTrackClick(e);
             }}
-            title="Drag to scroll"
-          />
+            className="absolute"
+            style={{
+              right: SCROLLBAR.gap,
+              top: 10,
+              bottom: 10,
+              width: SCROLLBAR.width,
+              borderRadius: 10,
+              background: "rgba(0,0,0,0.18)",
+              boxShadow: "inset 0 0 0 1px rgba(0,0,0,0.08)",
+              cursor: "pointer",
+            }}
+          >
+            <div
+              ref={thumbRef}
+              data-role="thumb"
+              onMouseDown={onThumbMouseDown}
+              className="absolute left-1/2 -translate-x-1/2"
+              style={{
+                top: `${thumbTop}px`,
+                width: SCROLLBAR.width - 4,
+                height: `${thumbH}px`,
+                borderRadius: 8,
+                background: "rgba(61,35,4,0.75)",
+                boxShadow: "inset 0 0 0 2px rgba(255,255,255,0.5)",
+                cursor: dragging ? "grabbing" : "grab",
+                willChange: "top",
+              }}
+              title="Drag to scroll"
+            />
+          </div>
         </div>
       </div>
 
-      {/* 彻底隐藏 WebKit 的系统滚动条，避免“纸外出现滚条”的错觉 */}
       <style jsx>{`
         #sessionViewport::-webkit-scrollbar {
           width: 0;
@@ -1310,26 +1352,25 @@ function escapeHtml(s: string) {
 
 export default function RecordPage() {
   useEffect(() => {
-  (async () => {
-    const sess = (window as any).__asrSession;
-    if (!sess) return;
+    (async () => {
+      const sess = (window as any).__asrSession;
+      if (!sess) return;
 
-    // If the old socket died while we were away, recreate it
-    const ws = await ensureOpenSocket(sess);
-    bindWsHandlers(ws);
-    setIsRecording(ws.readyState === WebSocket.OPEN);
+      // If the old socket died while we were away, recreate it
+      const ws = await ensureOpenSocket(sess);
+      bindWsHandlers(ws);
+      setIsRecording(ws.readyState === WebSocket.OPEN);
 
-    // Re-send campaign on (re)bind
-    try {
-      const id = await getCampaignId();
-      if (id && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: "set_campaign", campaignId: id }));
-        console.log("[ASR] set_campaign on mount:", id);
-      }
-    } catch {}
-  })();
-}, []);
-
+      // Re-send campaign on (re)bind
+      try {
+        const id = await getCampaignId();
+        if (id && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "set_campaign", campaignId: id }));
+          console.log("[ASR] set_campaign on mount:", id);
+        }
+      } catch {}
+    })();
+  }, []);
 
   useLockBodyScroll();
   // const { transcript, setTranscript } = useTranscript();
@@ -1610,7 +1651,7 @@ export default function RecordPage() {
     try {
       const res = await fetch("/api/current-campaign", { method: "GET" });
       const j = await res.json();
-      return j?.id ?? j?.item?.id ?? null;  
+      return j?.id ?? j?.item?.id ?? null;
     } catch {
       return null;
     }
@@ -1618,7 +1659,9 @@ export default function RecordPage() {
 
   function openWsWithCampaign(baseUrl: string, campaignId: string | null) {
     return new WebSocket(
-      campaignId ? `${baseUrl}?campaignId=${encodeURIComponent(campaignId)}` : baseUrl
+      campaignId
+        ? `${baseUrl}?campaignId=${encodeURIComponent(campaignId)}`
+        : baseUrl
     );
   }
 
@@ -1683,7 +1726,9 @@ export default function RecordPage() {
         // 1) Make sure the AudioContext is running
         const ctx: AudioContext | undefined = existing.ctx;
         if (ctx && ctx.state === "suspended") {
-          try { await ctx.resume(); } catch {}
+          try {
+            await ctx.resume();
+          } catch {}
         }
 
         // 2) Ensure we have an OPEN websocket (recreate if the server closed it after idle)
@@ -1696,8 +1741,16 @@ export default function RecordPage() {
         try {
           const resumedCampaignId = await getCampaignId();
           if (resumedCampaignId && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: "set_campaign", campaignId: resumedCampaignId }));
-            console.log("[ASR] re-sent set_campaign on resume:", resumedCampaignId);
+            ws.send(
+              JSON.stringify({
+                type: "set_campaign",
+                campaignId: resumedCampaignId,
+              })
+            );
+            console.log(
+              "[ASR] re-sent set_campaign on resume:",
+              resumedCampaignId
+            );
           }
         } catch {}
 
@@ -1737,12 +1790,16 @@ export default function RecordPage() {
       });
 
       // AudioContext + Worklet
-      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+      const ctx = new (window.AudioContext ||
+        (window as any).webkitAudioContext)({ sampleRate: 16000 });
       if (ctx.state === "suspended") {
         await ctx.resume();
       }
 
-      const moduleUrl = new URL("/worklets/pcm16-frames.js", window.location.origin);
+      const moduleUrl = new URL(
+        "/worklets/pcm16-frames.js",
+        window.location.origin
+      );
       moduleUrl.searchParams.set("v", Date.now().toString());
       await ctx.audioWorklet.addModule(moduleUrl.toString());
 
@@ -1761,7 +1818,9 @@ export default function RecordPage() {
       const res = await fetch("/api/current-campaign", { method: "GET" });
       const { id: campaignId } = await res.json();
       const ws = new WebSocket(
-        campaignId ? `${base}?campaignId=${encodeURIComponent(campaignId)}` : base
+        campaignId
+          ? `${base}?campaignId=${encodeURIComponent(campaignId)}`
+          : base
       );
 
       // Bind handlers
@@ -1777,14 +1836,18 @@ export default function RecordPage() {
         }
         while (queue.length) {
           const buf = queue.shift()!;
-          try { ws.send(buf); } catch {}
+          try {
+            ws.send(buf);
+          } catch {}
         }
       });
 
       node.port.onmessage = (ev) => {
         const ab = ev.data as ArrayBuffer;
         if (open && ws.readyState === WebSocket.OPEN) {
-          try { ws.send(ab); } catch {}
+          try {
+            ws.send(ab);
+          } catch {}
         } else {
           queue.push(ab);
           if (queue.length > 200) queue.splice(0, queue.length - 200);
@@ -1801,7 +1864,6 @@ export default function RecordPage() {
       setIsRecording(false);
     }
   };
-
 
   // Pause recording: keep session objects in memory so they can be resumed.
   const stopRecording = () => {
@@ -1876,7 +1938,8 @@ export default function RecordPage() {
           sess.ws.onerror = null;
         } catch {}
         try {
-          if (sess.ws.readyState === WebSocket.OPEN) sess.ws.close(1000, "done");
+          if (sess.ws.readyState === WebSocket.OPEN)
+            sess.ws.close(1000, "done");
         } catch {}
       }
 
@@ -1898,22 +1961,32 @@ export default function RecordPage() {
   // End Session: save AI summary to DB (update existing summary if present), cleanup and navigate
   const handleEndSession = async (): Promise<void> => {
     // 1) Politely tell the ASR server we're done and wait for its ack/drain
-    try { await endStreamAndWait(); } catch {}
+    try {
+      await endStreamAndWait();
+    } catch {}
 
     // 2) Resolve campaign context robustly
     let campaignId = currentCampaignId?.trim() || null;
     if (!campaignId) {
-      try { campaignId = (await getCampaignId()) || null; } catch {}
+      try {
+        campaignId = (await getCampaignId()) || null;
+      } catch {}
     }
     if (!campaignId) {
-      try { campaignId = window.localStorage.getItem("currentCampaignId") || null; } catch {}
+      try {
+        campaignId = window.localStorage.getItem("currentCampaignId") || null;
+      } catch {}
     }
 
-    const campaignTitle =
-      (window?.localStorage?.getItem("currentCampaignTitle") || "Untitled Campaign").trim();
+    const campaignTitle = (
+      window?.localStorage?.getItem("currentCampaignTitle") ||
+      "Untitled Campaign"
+    ).trim();
     const summaryText = summary || "";
     const existingSummaryId =
-      typeof window !== "undefined" ? window.localStorage.getItem("currentSummaryId") : null;
+      typeof window !== "undefined"
+        ? window.localStorage.getItem("currentSummaryId")
+        : null;
 
     if (!campaignId) {
       console.error("[EndSession] Missing campaignId; not saving/navigating.");
@@ -1964,7 +2037,11 @@ export default function RecordPage() {
     }
 
     // 4) Stop audio + WS, free resources
-    try { cleanupRecording(); } catch (e) { console.warn("cleanup failed", e); }
+    try {
+      cleanupRecording();
+    } catch (e) {
+      console.warn("cleanup failed", e);
+    }
 
     // 5) Reset UI state so the page is fresh next time you return
     try {
