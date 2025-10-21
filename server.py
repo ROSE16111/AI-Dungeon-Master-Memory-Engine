@@ -169,34 +169,57 @@ def embed_query_batched(text: str) -> List[List[float]]:
 # =====================================================================
 # CHROMA
 # =====================================================================
-# Global clients; initialized once and self-healed if needed
-chroma = None
-collection = None
+from threading import RLock
 
-def init_chroma():
-    """
-    Initialize a persistent Chroma client and collection with the custom EF.
-    Creates the database directory if required.
-    """
-    global chroma, collection
-    os.makedirs(DB_PATH, exist_ok=True)
-    chroma = chromadb.PersistentClient(path=DB_PATH, settings=Settings(anonymized_telemetry=False))
-    collection = chroma.get_or_create_collection(name=COLLECTION_NAME, embedding_function=ef)
-    print(f"[Chroma] ready at {DB_PATH}, collection={COLLECTION_NAME}")
+_chroma_clients: dict[str, chromadb.PersistentClient] = {}
+_collections: dict[str, Any] = {}
+_chroma_lock = RLock()
 
-def ensure_collection():
+def _db_key_for_campaign(campaign_id: str | None) -> str:
+    """Return a stable cache key for a campaign's DB path."""
+    return campaign_id.strip() if campaign_id else "__default__"
+
+def _db_path_for_campaign(campaign_id: str | None) -> str:
+    """Resolve on-disk path for a campaign's Chroma DB."""
+    if not campaign_id:
+        return DB_PATH
+    safe = re.sub(r"[^a-zA-Z0-9._-]+", "_", campaign_id.strip())
+    return os.path.join(DB_PATH, safe)
+
+def get_collection_for_campaign(campaign_id: str | None) -> Any:
     """
-    Light-touch health check for the global collection. Re-inits on failure.
+    Get (or create) the Chroma collection for the given campaign.
+    Each campaign uses its own PersistentClient path for hard isolation.
     """
-    global collection
+    key = _db_key_for_campaign(campaign_id)
+    with _chroma_lock:
+        if key in _collections:
+            return _collections[key]
+
+        path = _db_path_for_campaign(campaign_id)
+        os.makedirs(path, exist_ok=True)
+        client = chromadb.PersistentClient(path=path, settings=Settings(anonymized_telemetry=False))
+        coll = client.get_or_create_collection(name="docs", embedding_function=ef)
+
+        _chroma_clients[key] = client
+        _collections[key] = coll
+        print(f"[Chroma] ready at {path}, collection=docs (campaign={campaign_id or 'default'})")
+        return coll
+
+def ping_collection(campaign_id: str | None) -> None:
+    """Light health check; if it fails, rebuild only that campaign's client/collection."""
+    key = _db_key_for_campaign(campaign_id)
     try:
-        _ = collection.count()
+        get_collection_for_campaign(campaign_id).count()
     except Exception as e:
-        print(f"[Chroma] ensure failed ({type(e).__name__}): {e} — reinit")
-        init_chroma()
+        print(f"[Chroma] health failed for {key}: {e} — reinit")
+        with _chroma_lock:
+            _chroma_clients.pop(key, None)
+            _collections.pop(key, None)
+        _ = get_collection_for_campaign(campaign_id)  # re-create
 
-# Eager init for server start
-init_chroma()
+# Eager init for default collection only (so /health etc. still work)
+_ = get_collection_for_campaign(None)
 
 # =====================================================================
 # APP + LIFESPAN
@@ -502,11 +525,11 @@ class RollingSummarizer:
 # =====================================================================
 # MODELS
 # =====================================================================
-# Pydantic models for request validation and OpenAPI docs
 class IngestTranscriptRequest(BaseModel):
     id_prefix: str
     text: str
     metadata: Optional[Dict[str, Any]] = None
+    campaign_id: Optional[str] = None  
 
 class IngestItem(BaseModel):
     id: str
@@ -515,55 +538,69 @@ class IngestItem(BaseModel):
 
 class IngestRequest(BaseModel):
     items: List[IngestItem]
+    campaign_id: Optional[str] = None 
 
 class QueryRequest(BaseModel):
     query: str
     top_k: int = 5
     where: Optional[Dict[str, Any]] = None
+    campaign_id: Optional[str] = None 
 
 class AnswerRequest(BaseModel):
     question: str
     top_k: int = 5
     where: Optional[Dict[str, Any]] = None
+    campaign_id: Optional[str] = None 
 
 # =====================================================================
 # ROUTES: HEALTH / ADMIN
 # =====================================================================
 @app.get("/health")
-def health():
+def health(campaign_id: Optional[str] = None):
     """
-    Health and diagnostics endpoint for quick status checks.
-    Returns model names and current collection size.
+    Health and diagnostics endpoint.
+    Pass ?campaign_id=... to inspect that DB; default otherwise.
     """
-    ensure_collection()
+    ping_collection(campaign_id)
+    coll = get_collection_for_campaign(campaign_id)
     return {
         "ok": True,
         "models": {"whisper": WHISPER_MODEL, "embed": EMBED_MODEL, "gen": OLLAMA_SUMMARY_MODEL},
-        "db": {"path": DB_PATH, "collection": COLLECTION_NAME, "count": collection.count()},
+        "db": {
+            "path": _db_path_for_campaign(campaign_id),
+            "collection": "docs",
+            "campaign": campaign_id,
+            "count": coll.count(),
+        },
     }
 
 @app.post("/admin/clear_collection")
-def admin_clear_collection():
+def admin_clear_collection(campaign_id: Optional[str] = None):
     """
-    Hard delete of all vectors and metadata in the current collection.
+    Hard delete of all vectors and metadata in the selected campaign collection.
     """
-    ensure_collection()
+    coll = get_collection_for_campaign(campaign_id)
     try:
-        collection.delete(where={})
-        return {"ok": True, "cleared": True}
+        coll.delete(where={})
+        return {"ok": True, "cleared": True, "campaign_id": campaign_id}
     except Exception as e:
         raise HTTPException(500, f"clear failed: {e}")
 
 @app.post("/admin/reset_disk")
-def admin_reset_disk():
+def admin_reset_disk(campaign_id: Optional[str] = None):
     """
-    Delete the on-disk Chroma database directory and recreate a fresh collection.
+    Delete the on-disk Chroma database for the selected campaign and recreate a fresh one.
+    If no campaign_id is provided, it resets the default DB.
     """
+    path = _db_path_for_campaign(campaign_id)
     try:
-        if os.path.isdir(DB_PATH):
-            shutil.rmtree(DB_PATH)
-        init_chroma()
-        return {"ok": True, "recreated": True, "path": DB_PATH}
+        if os.path.isdir(path):
+            shutil.rmtree(path)
+        with _chroma_lock:
+            _chroma_clients.pop(_db_key_for_campaign(campaign_id), None)
+            _collections.pop(_db_key_for_campaign(campaign_id), None)
+        _ = get_collection_for_campaign(campaign_id)
+        return {"ok": True, "recreated": True, "path": path, "campaign_id": campaign_id}
     except Exception as e:
         raise HTTPException(500, f"reset_disk failed: {e}")
 
@@ -573,48 +610,63 @@ def admin_reset_disk():
 @app.post("/ingest_transcript")
 def ingest_transcript(req: IngestTranscriptRequest):
     """
-    Split a transcript into sentence-based chunks and add to Chroma with metadata.
-    Sets 'type'='raw' to distinguish live or transcript content.
+    Ingest a full transcript into the vector database (per campaign).
+    - Splits the provided transcript text into overlapping sentence-based chunks.
+    - Generates unique IDs for each chunk using the given `id_prefix`.
+    - Cleans and attaches metadata, tagging each entry as type="raw" and 
+    including the `campaign_id` if provided.
+    - Inserts all chunks into the Chroma collection associated with the 
+    specified campaign (or the default collection if none).
     """
-    ensure_collection()
+    coll = get_collection_for_campaign(req.campaign_id)
     chunks = chunk_text(req.text)
     if not chunks:
         raise HTTPException(status_code=400, detail="empty transcript")
     base_meta = clean_metadata(req.metadata)
     base_meta["type"] = "raw"
+    if req.campaign_id:
+        base_meta["campaign_id"] = req.campaign_id
     ids = [f"{req.id_prefix}_{i:04d}" for i in range(len(chunks))]
-    docs = chunks
     metas = [{**base_meta, "chunk_index": i} for i in range(len(chunks))]
-    collection.add(ids=ids, documents=docs, metadatas=metas)
-    return {"ok": True, "count": len(ids)}
+    coll.add(ids=ids, documents=chunks, metadatas=metas)
+    return {"ok": True, "count": len(ids), "campaign_id": req.campaign_id}
 
 @app.post("/ingest")
 def ingest(req: IngestRequest):
     """
-    Ingest arbitrary items as-is into Chroma.
-    Caller controls ids, text, and optional metadata.
+    Ingest arbitrary text items into the vector database (per campaign).
+    - Accepts a list of items, each with a custom ID, text, and optional metadata.
+    - Cleans metadata to ensure only JSON-serializable fields are stored.
+    - Automatically tags entries with the campaign ID when provided.
+    - Adds all items to the Chroma collection for the selected campaign, or to
+    the default collection if no campaign is specified.
     """
-    ensure_collection()
+    coll = get_collection_for_campaign(req.campaign_id)
     ids = [str(i.id) for i in req.items]
     docs = [i.text for i in req.items]
     metas = [clean_metadata(i.metadata) for i in req.items]
+    if req.campaign_id:
+        for m in metas:
+            m["campaign_id"] = req.campaign_id
     if not (len(ids) == len(docs) == len(metas)):
         raise HTTPException(status_code=400, detail="ids/docs/metadatas length mismatch")
-    collection.add(ids=ids, documents=docs, metadatas=metas)
-    return {"ok": True, "count": len(ids)}
+    coll.add(ids=ids, documents=docs, metadatas=metas)
+    return {"ok": True, "count": len(ids), "campaign_id": req.campaign_id}
 
 @app.post("/query")
 def query(req: QueryRequest):
     """
-    Vector query against the collection.
-    Returns top_k results with documents, metadata, and distances.
+    Perform a semantic vector search within the selected campaign database.
+    - Embeds the input query text using the Ollama embedding model.
+    - Searches the campaign’s Chroma collection for the most similar documents.
+    - Returns the top_k matching chunks with their stored metadata and distances.
     """
-    ensure_collection()
+    coll = get_collection_for_campaign(req.campaign_id)
     try:
         qbatch = embed_query_batched(req.query)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Query embedding failed: {e}")
-    res = collection.query(
+    res = coll.query(
         query_embeddings=qbatch,
         n_results=req.top_k,
         where=req.where,
@@ -632,22 +684,28 @@ def query(req: QueryRequest):
             "metadata": metas[i],
             "distance": dists[i] if i < len(dists) else None
         })
-    return {"results": items}
+    return {"results": items, "campaign_id": req.campaign_id}
 
 @app.post("/answer")
 def answer(req: AnswerRequest):
     """
-    Retrieve a small context set and ask the LLM to answer strictly from it.
-    Optionally biases selection using a detected focus term.
+    Retrieve contextually relevant chunks and generate a grounded answer 
+    using the LLM (RAG pipeline).
+    - Embeds the user's question via the Ollama embedding model.
+    - Queries the campaign's Chroma collection for the most relevant chunks.
+    - Builds a short context window from the retrieved results.
+    - Prompts the LLM to answer *only* from that context — it will respond 
+    with “I don't know” if no sufficient information is found.
+    - Optionally re-ranks results based on focus terms (e.g. named entities).
     """
-    ensure_collection()
+    coll = get_collection_for_campaign(req.campaign_id)
     effective_where = req.where if (req.where and len(req.where)) else {"type": "raw"}
     try:
         qbatch = embed_query_batched(req.question)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Query embedding failed: {e}")
 
-    res = collection.query(
+    res = coll.query(
         query_embeddings=qbatch,
         n_results=req.top_k,
         where=effective_where,
@@ -656,7 +714,7 @@ def answer(req: AnswerRequest):
     ids = res.get("ids", [[]])[0]; docs = res.get("documents", [[]])[0]; metas = res.get("metadatas", [[]])[0]; dists = res.get("distances", [[]])[0]
 
     if not ids:
-        return {"answer": "I don't know based on the current knowledge.", "used": []}
+        return {"answer": "I don't know based on the current knowledge.", "used": [], "campaign_id": req.campaign_id}
 
     # Optional re-ranking based on a detected proper noun to improve relevance
     metas = [(m or {}) if isinstance(m, dict) else {} for m in metas]
@@ -684,7 +742,7 @@ def answer(req: AnswerRequest):
         # Debug mode: just echo the first snippet
         snippet = trim_text(docs[0] if docs else "", 200)
         used = [{"id": ids[0], "text": docs[0], "metadata": metas[0]}] if ids else []
-        return {"answer": snippet or "I don’t know based on the current knowledge.", "used": used}
+        return {"answer": snippet or "I don't know based on the current knowledge.", "used": used}
 
     # Constrained answering prompt; sentinel trimming avoids model ramble
     prompt = (
@@ -726,7 +784,7 @@ def answer(req: AnswerRequest):
         raise HTTPException(status_code=502, detail=f"Ollama returned non-JSON: {e}")
 
     used = [{"id": id_, "text": d, "metadata": m} for id_, d, m in zip(ids, docs, metas)]
-    return {"answer": answer_text, "used": used}
+    return {"answer": answer_text, "used": used, "campaign_id": req.campaign_id}
 
 # =====================================================================
 # WS SENDER
@@ -894,11 +952,13 @@ async def handle_audio_ws(websocket: WebSocket):
 
                 # Live embedding of recognized text for immediate retrieval
                 try:
-                    ensure_collection()
+                    coll = get_collection_for_campaign(campaign_id)
                     doc_id = f"live_{int(time.time()*1000)}"
                     meta = {"type": "raw", "source": "live_ws"}
-                    collection.add(ids=[doc_id], documents=[final_text], metadatas=[meta])
-                    print(f"[Embed] Added live chunk -> id={doc_id}, len={len(final_text)} chars")
+                    if campaign_id:
+                        meta["campaign_id"] = campaign_id
+                    coll.add(ids=[doc_id], documents=[final_text], metadatas=[meta])
+                    print(f"[Embed] Added live chunk -> id={doc_id}, len={len(final_text)} chars, campaign={campaign_id}")
                 except Exception as e:
                     print(f"[Embed] failed to add live chunk: {e}")
 
