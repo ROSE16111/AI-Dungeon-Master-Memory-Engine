@@ -2,7 +2,17 @@
 // What: 在底层画布绘制地图，在上层画布绘制“雾层”，用 destination-out 打洞形成光路。
 // Why: Canvas 方案方便扩展多光源 / Line-of-Sight / 性能更稳。
 // Keywords: Fog of War(雾层), Light Source(光源), Grid(网格), destination-out(打洞混合), Radial Gradient(径向渐变软边)
-
+//Input:
+//Route param [id] for the resource (map).
+//User’s current campaign (from an httpOnly cookie currentCampaignId, read server-side).
+//Initial map attributes from DB (e.g., gridCols, gridRows, optional lightI, lightJ, lightRadius).
+//The uploaded map image (fileUrl) or a preview URL.
+// {<div style={{width:display.w, height:display.h}}>
+//   [最底层]  <canvas ref={baseRef}>         —— 底图（等比缩放后的地图像素）
+//   [中间层]  <div style={gridStyle}>         —— 网格(用CSS渐变画线，便宜又清晰)
+//   [上面层]  <canvas ref={fogRef}>          —— 雾层(整块黑 + 用“挖洞”显示光照)
+//   [悬浮层]  <Hud/>                          —— HUD 控制面板（右下角，可调节参数）
+// </div> */}
 "use client";
 import React, { useEffect, useRef, useState, useCallback } from "react";
 
