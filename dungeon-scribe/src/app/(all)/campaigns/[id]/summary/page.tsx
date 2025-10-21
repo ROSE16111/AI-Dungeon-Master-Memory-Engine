@@ -22,15 +22,23 @@ function useLockBodyScroll() {
   }, []);
 }
 
-/*=========== Component 0: Top-right Search（受控） ===========*/
+/*=========== Component 0: Top-right Search（受控，带命中导航） ===========*/
 function SearchMapsBar({
   q,
   setQ,
   onSearch,
+  showPrevNext,
+  hitInfo,
+  onPrev,
+  onNext,
 }: {
   q: string;
   setQ: (v: string) => void;
   onSearch: () => void;
+  showPrevNext?: boolean;
+  hitInfo?: string;
+  onPrev?: () => void;
+  onNext?: () => void;
 }) {
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -59,7 +67,16 @@ function SearchMapsBar({
             fontWeight: 700,
             fontSize: 16,
           }}
-          title="输入角色名并回车"
+          title="Enter: next hit; Shift+Enter: previous"
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              if (showPrevNext && (onPrev || onNext)) {
+                e.preventDefault();
+                if (e.shiftKey && onPrev) onPrev();
+                else if (onNext) onNext();
+              }
+            }
+          }}
         />
         {/* 右侧放大镜按钮 */}
         <button
@@ -80,6 +97,30 @@ function SearchMapsBar({
           </svg>
         </button>
       </form>
+
+      {/* 上/下一条命中（仅在有命中时显示） */}
+      {showPrevNext && (
+        <div
+          className="absolute flex items-center gap-2 text-white"
+          style={{ left: 1096, top: 154, zIndex: 50 }}
+        >
+          <button
+            onClick={onPrev}
+            className="px-3 py-1 rounded-md bg-white/15 hover:bg白/25 active:scale-95 transition cursor-pointer"
+            title="previous (Shift+Enter)"
+          >
+            previous
+          </button>
+          <button
+            onClick={onNext}
+            className="px-3 py-1 rounded-md bg白/15 hover:bg白/25 active:scale-95 transition cursor-pointer"
+            title="next (Enter)"
+          >
+            next
+          </button>
+          <span className="text-sm opacity-90">{hitInfo}</span>
+        </div>
+      )}
     </>
   );
 }
@@ -230,21 +271,49 @@ export default function SummaryPage() {
   }, [params]);
 
   // 搜索：仅在 character 视图里生效
+  // 搜索：Character + Sessions
   const [q, setQ] = useState("");
   const [charSearchKey, setCharSearchKey] = useState("");
+  const [charSearchTick, setCharSearchTick] = useState(0);
+  // —— Sessions 用：关键词、高亮命中总数、当前命中索引 ——
+  const [searchTerm, setSearchTerm] = useState("");
+  const [hitCount, setHitCount] = useState(0);
+  const [activeHit, setActiveHit] = useState(0);
 
   const handleSearch = () => {
     const query = q.trim();
     if (view === "character") {
-      setCharSearchKey(query); // 交给轮播组件去居中并做动画
+      setCharSearchKey(query); // 角色轮播的“居中+闪光”
+      setCharSearchTick((t) => t + 1); // 每次按 Enter 递增，强制触发动画
+    } else {
+      setSearchTerm(query); // Sessions：记录关键词
+      setActiveHit(0); // 光标回到第一条命中
     }
-    // sessions 不联动（按你的要求先不做）
   };
+
+  const onPrev = () => {
+    if (hitCount > 0) setActiveHit((i) => (i - 1 + hitCount) % hitCount);
+  };
+  const onNext = () => {
+    if (hitCount > 0) setActiveHit((i) => (i + 1) % hitCount);
+  };
+
+  // Sessions：输入框 q 变化时清空上一次搜索结果（只有按下 Enter 调用 handleSearch 才重新计算命中）
+  useEffect(() => {
+    if (view === "sessions") {
+      if (searchTerm !== "") setSearchTerm("");
+      if (hitCount !== 0) setHitCount(0);
+      if (activeHit !== 0) setActiveHit(0);
+    }
+  }, [q, view]);
 
   const onChangeView = (v: "sessions" | "character") => {
     setView(v);
     setQ("");
     setCharSearchKey("");
+    setSearchTerm("");
+    setHitCount(0);
+    setActiveHit(0);
   };
 
   return (
@@ -258,7 +327,19 @@ export default function SummaryPage() {
       </button>
 
       {/* 右上角搜索 */}
-      <SearchMapsBar q={q} setQ={setQ} onSearch={handleSearch} />
+      <SearchMapsBar
+        q={q}
+        setQ={setQ}
+        onSearch={handleSearch}
+        showPrevNext={view === "sessions" && hitCount > 0}
+        hitInfo={
+          view === "sessions" && hitCount > 0
+            ? `${activeHit + 1}/${hitCount}`
+            : ""
+        }
+        onPrev={onPrev}
+        onNext={onNext}
+      />
 
       {/* 主体 */}
       <main
@@ -280,7 +361,14 @@ export default function SummaryPage() {
             <ParchmentBackground />
 
             {/* Sessions 维持原样，不接入搜索 */}
-            {view === "sessions" && <CardOnPaper campaignId={campaignId} />}
+            {view === "sessions" && (
+              <CardOnPaper
+                campaignId={campaignId}
+                searchTerm={searchTerm}
+                activeHit={activeHit}
+                onHitCount={setHitCount}
+              />
+            )}
 
             {/* Characters：接入 searchName 实现“居中+动画” */}
             {view === "character" && (
@@ -297,6 +385,7 @@ export default function SummaryPage() {
               >
                 <CharacterCarouselStacked
                   searchName={charSearchKey}
+                  searchTick={charSearchTick}
                   campaignIdProp={campaignId}
                 />
               </div>
@@ -335,7 +424,17 @@ function ParchmentBackground() {
 
 /**======= Component4: Sessions 里的白卡片（右上角加下载按钮） */
 /**======= Component4: Sessions 里的白卡片（下载 .txt：标题+日期+Summary） */
-function CardOnPaper({ campaignId }: { campaignId?: string | null }) {
+function CardOnPaper({
+  campaignId,
+  searchTerm = "",
+  activeHit = 0,
+  onHitCount,
+}: {
+  campaignId?: string | null;
+  searchTerm?: string;
+  activeHit?: number;
+  onHitCount?: (n: number) => void;
+}) {
   const PAPER_TOP = "30vh";
   const PAPER_W = "60vw";
 
@@ -348,6 +447,42 @@ function CardOnPaper({ campaignId }: { campaignId?: string | null }) {
   const [editable, setEditable] = useState(false);
   const [summary, setSummary] = useState(initialSummary);
   const [summaryId, setSummaryId] = useState<string | null>(null);
+  const viewportRef = useRef<HTMLDivElement>(null);
+
+  function renderHighlighted(text: string) {
+    const key = (searchTerm || "").trim();
+    if (!key) return text;
+
+    const esc = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(esc, "gi");
+
+    const nodes: React.ReactNode[] = [];
+    let last = 0,
+      idx = 0,
+      m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      const start = m.index,
+        end = start + m[0].length;
+      if (start > last) nodes.push(text.slice(last, start));
+      nodes.push(
+        <mark
+          key={`hit-${idx}`}
+          className="search-hit"
+          data-hit={idx++}
+          style={{
+            paddingInline: 2,
+            background: "rgba(255,230,0,0.6)",
+            borderRadius: 3,
+          }}
+        >
+          {text.slice(start, end)}
+        </mark>
+      );
+      last = end;
+    }
+    if (last < text.length) nodes.push(text.slice(last));
+    return nodes;
+  }
 
   useEffect(() => {
     // If a campaignId is provided, fetch campaigns and extract the latest session summary for that campaign
@@ -406,6 +541,49 @@ function CardOnPaper({ campaignId }: { campaignId?: string | null }) {
       })
       .catch((err) => console.error("Failed to load session summary:", err));
   }, [campaignId]);
+
+  // 关键词或内容变化时：统计命中并滚到第一条
+  useEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp) {
+      onHitCount?.(0);
+      return;
+    }
+    requestAnimationFrame(() => {
+      const hits = vp.querySelectorAll<HTMLElement>("mark.search-hit");
+      onHitCount?.(hits.length);
+      if ((searchTerm || "").trim() && hits.length > 0) {
+        const el = hits[0]!;
+        const offset =
+          el.getBoundingClientRect().top - vp.getBoundingClientRect().top;
+        vp.scrollBy({ top: offset - 40, behavior: "smooth" });
+      }
+    });
+  }, [searchTerm, summary]);
+
+  // 当前命中索引变化时：滚动并高亮当前命中
+  useEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+    const hits = vp.querySelectorAll<HTMLElement>("mark.search-hit");
+    hits.forEach((h) => h.classList.remove("search-hit--active"));
+    if (!hits.length) return;
+
+    const idx = Math.max(0, Math.min(activeHit ?? 0, hits.length - 1));
+    const el = hits[idx]!;
+    el.classList.add("search-hit--active");
+
+    const vpRect = vp.getBoundingClientRect();
+    const elRect = el.getBoundingClientRect();
+    const top = elRect.top - vpRect.top;
+
+    if (top < 60 || top > vp.clientHeight - 80) {
+      vp.scrollBy({
+        top: top - vp.clientHeight / 2 + elRect.height / 2,
+        behavior: "smooth",
+      });
+    }
+  }, [activeHit, searchTerm, summary]);
 
   // —— 点击下载：导出为 .txt（UTF-8） ——
   const downloadSummary = () => {
@@ -485,6 +663,7 @@ function CardOnPaper({ campaignId }: { campaignId?: string | null }) {
         {/* 文字总结（可编辑） */}
         <div className="mt-6">
           <div
+            ref={viewportRef}
             className="relative w-full"
             style={{
               minHeight: 220,
@@ -513,22 +692,13 @@ function CardOnPaper({ campaignId }: { campaignId?: string | null }) {
             {editable ? (
               <>
                 <textarea
-                  value={summary ?? ""}
+                  value={summary}
                   onChange={(e) => setSummary(e.target.value)}
-                  className="w-full bg-white p-3 rounded-md border border-gray-300 text-[#333] font-sans text-[16px] leading-[1.6] resize-none focus:outline-none focus:ring-2 focus:ring-[#A43718]"
-                  style={{
-                    minHeight: "160px",
-                    maxHeight: "400px",
-                    height: "auto",
-                    overflowY: "auto",
-                  }}
-                  // 基于换行数动态设置行数，最少 10 行；对 undefined 做了保护
-                  rows={Math.max(10, (summary ?? "").split("\n").length)}
+                  className="w-full h-[160px] bg-white p-3 rounded-md border border-gray-300 text-[#333] font-sans text-[16px] leading-[1.6] resize-none focus:outline-none focus:ring-2 focus:ring-[#A43718]"
                 />
                 <div className="flex justify-end mt-3">
                   <button
                     onClick={async () => {
-                      // ==== 你的“保存逻辑”保持不变（原样搬运） ====
                       if (!campaignId) {
                         alert("No campaign selected to save summary to.");
                         return;
@@ -537,7 +707,7 @@ function CardOnPaper({ campaignId }: { campaignId?: string | null }) {
                       console.log("Saving summary", {
                         campaignId,
                         summaryId,
-                        length: (summary ?? "").length,
+                        length: summary?.length,
                       });
 
                       try {
@@ -571,7 +741,7 @@ function CardOnPaper({ campaignId }: { campaignId?: string | null }) {
                           headers: { "Content-Type": "application/json" },
                           body: JSON.stringify({
                             campaignId,
-                            content: summary ?? "",
+                            content: summary,
                             summaryId,
                           }),
                         });
@@ -597,6 +767,7 @@ function CardOnPaper({ campaignId }: { campaignId?: string | null }) {
                         if (json?.summary?.content)
                           setSummary(json.summary.content);
                         if (json?.summary?.id) setSummaryId(json.summary.id);
+                        // If server returned campaign updateDate, refresh displayed date
                         if (json?.campaign?.updateDate)
                           setDate(
                             new Date(json.campaign.updateDate).toLocaleString()
@@ -606,7 +777,6 @@ function CardOnPaper({ campaignId }: { campaignId?: string | null }) {
                         console.error("Failed to save summary:", e);
                         alert(e?.message || "Failed to save summary");
                       }
-                      // ==== 以上为原逻辑 ====
                     }}
                     className="px-4 py-2 bg-[#A43718] text-white rounded-md hover:opacity-90 active:scale-95 transition"
                   >
@@ -624,7 +794,7 @@ function CardOnPaper({ campaignId }: { campaignId?: string | null }) {
                   whiteSpace: "pre-line",
                 }}
               >
-                {summary}
+                {renderHighlighted(summary)}
               </span>
             )}
           </div>
@@ -637,9 +807,11 @@ function CardOnPaper({ campaignId }: { campaignId?: string | null }) {
 /********* ===== Components 5: 角色轮播（3 张位，支持 N>=3 环绕；含搜索命中动画） **********/
 function CharacterCarouselStacked({
   searchName = "",
+  searchTick,
   campaignIdProp,
 }: {
   searchName?: string;
+  searchTick?: number; // ✅ 新增
   campaignIdProp?: string | undefined | null;
 }) {
   const params = useParams();
@@ -746,17 +918,37 @@ function CharacterCarouselStacked({
   };
 
   // 根据搜索词把对应角色切到中间并触发 hint 动画（全名优先，包含匹配兜底） - ALWAYS called
+  const lastTargetRef = useRef<number | null>(null);
+  // ✅ 命中后：切到中间 & 触发 hint；若已在中间或重复命中，也要闪一下
   useEffect(() => {
     const key = searchName.trim().toLowerCase();
     if (!key || items.length === 0) return;
+
+    // 先全名匹配，再包含匹配
     let i = items.findIndex((x) => x.name.toLowerCase() === key);
     if (i < 0) i = items.findIndex((x) => x.name.toLowerCase().includes(key));
-    if (i >= 0) {
-      goTo(i);
+    if (i < 0) return;
+
+    const sameTarget = lastTargetRef.current === i;
+    const alreadyCenter = i === cur;
+
+    if (alreadyCenter) {
+      // 之前是直接 return；改为也闪一下，给用户反馈
       fireHint();
+      lastTargetRef.current = i;
+      return;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchName, items]); // 参考对照文件的写法
+    if (sameTarget) {
+      // 之前是直接 return；回车“重复搜索”时也闪一下
+      fireHint();
+      return;
+    }
+
+    // 真正切换 + 闪光
+    goTo(i);
+    fireHint();
+    lastTargetRef.current = i;
+  }, [searchName, searchTick, items, cur]);
 
   // Conditional rendering AFTER all hooks
   const N = items.length;

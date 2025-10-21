@@ -61,7 +61,17 @@ function SearchMapsBar({
       >
         <input
           value={q}
-          onChange={(e) => setQ(e.target.value)}
+          onChange={(e) => {
+            const newVal = e.target.value;
+            setQ(newVal);
+            // 一旦输入变化，就清空之前的 session 搜索结果
+            if (showPrevNext) {
+              // 父组件是 RecordPage，可以通过 onSearchClear 回调清空状态
+              if (typeof (window as any).onSearchClear === "function") {
+                (window as any).onSearchClear();
+              }
+            }
+          }}
           placeholder="SEARCH..."
           aria-label="Search"
           className="h-full w-full rounded-full border-2 border-white/90 bg-transparent
@@ -109,6 +119,7 @@ function SearchMapsBar({
           style={{ left: 1096, top: 74, zIndex: 50 }}
         >
           <button
+            type="button"
             onClick={onPrev}
             className="px-3 py-1 rounded-md bg-white/15 hover:bg-white/25 active:scale-95 transition cursor-pointer"
             title="previous (Shift+Enter)"
@@ -116,6 +127,7 @@ function SearchMapsBar({
             previous
           </button>
           <button
+            type="button"
             onClick={onNext}
             className="px-3 py-1 rounded-md bg-white/15 hover:bg-white/25 active:scale-95 transition cursor-pointer"
             title="next (Enter)"
@@ -784,8 +796,9 @@ function SessionsInsidePaper({
 }) {
   const { summary } = useTranscript();
 
-  const raw = summary || `No content yet`;
+  const raw = summary || `Not content yet`;
 
+  // 解析为 {title, body} 数组；后续可直接换成接口返回的数据
   type Block = { title: string; body: string };
   const blocks: Block[] = raw
     .trim()
@@ -798,28 +811,58 @@ function SessionsInsidePaper({
       };
     });
 
-  const viewportRef = useRef<HTMLDivElement>(null);
-  const trackRef = useRef<HTMLDivElement>(null);
-  const thumbRef = useRef<HTMLDivElement>(null);
-
-  const [thumbTop, setThumbTop] = useState(0);
-  const [thumbH, setThumbH] = useState(46);
-  const [dragging, setDragging] = useState(false);
-  const dragOffsetRef = useRef(0);
-  const sizesRef = useRef({ trackH: 1, maxThumbTop: 1, maxScrollTop: 1 });
-
-  const SCROLLBAR = { width: 12, gap: 10 };
-  const SAFE = { left: 22, right: 22, top: 1, bottom: 25 };
-  const contentBox = {
-    left: 67.86 + SAFE.left,
-    top: 24 + SAFE.top,
-    width: 867 - SAFE.left - SAFE.right,
-    height: 540 - SAFE.top - SAFE.bottom,
-  };
+  // === search: count hits, highlight, and jump to active hit ===
+  const hitRefs = useRef<Array<HTMLSpanElement | null>>([]);
+  hitRefs.current = []; // rebuild on each render
 
   const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const MAX_HITS = 500;
 
+  // 根据 activeHit 定位到对应命中（滚动到视窗中央）
+  // 当搜索词变化后：下一帧统计并滚到第一个命中
+  useEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp) {
+      onHitCount(0);
+      return;
+    }
+    requestAnimationFrame(() => {
+      const hits = vp.querySelectorAll<HTMLElement>("mark.search-hit");
+      onHitCount(hits.length);
+      if (searchTerm && hits.length > 0) {
+        const el = hits[0]!;
+        const offset =
+          el.getBoundingClientRect().top - vp.getBoundingClientRect().top;
+        vp.scrollBy({ top: offset - 40, behavior: "smooth" });
+      }
+    });
+  }, [searchTerm]);
+
+  // 当 activeHit 或 searchTerm 变化：切换“当前命中”样式并滚动定位
+  useEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+
+    const hits = vp.querySelectorAll<HTMLElement>("mark.search-hit");
+    hits.forEach((h) => h.classList.remove("search-hit--active"));
+    if (!hits.length) return;
+
+    const idx = Math.max(0, Math.min(activeHit, hits.length - 1));
+    const el = hits[idx]!;
+    el.classList.add("search-hit--active");
+
+    const vpRect = vp.getBoundingClientRect();
+    const elRect = el.getBoundingClientRect();
+    const top = elRect.top - vpRect.top;
+    if (top < 60 || top > vp.clientHeight - 80) {
+      vp.scrollBy({
+        top: top - vp.clientHeight / 2 + elRect.height / 2,
+        behavior: "smooth",
+      });
+    }
+  }, [activeHit, searchTerm]);
+
+  // 渲染时把命中包一层 <mark>
+  // 替换 renderHighlighted，给每个命中标 <mark className="search-hit" data-hit={序号}>
   function renderHighlighted(text: string) {
     if (!searchTerm?.trim()) return text;
     const re = new RegExp(escapeRegExp(searchTerm), "gi");
@@ -827,9 +870,7 @@ function SessionsInsidePaper({
     let last = 0,
       idx = 0,
       m: RegExpExecArray | null;
-
     while ((m = re.exec(text)) !== null) {
-      if (idx >= MAX_HITS) break;
       const start = m.index,
         end = start + m[0].length;
       if (start > last) nodes.push(text.slice(last, start));
@@ -853,51 +894,49 @@ function SessionsInsidePaper({
     return nodes;
   }
 
-  // --- recalc with rAF debounce + only update when changed ---
-  let recalcRaf = 0;
-  const recalc = () => {
-    cancelAnimationFrame(recalcRaf);
-    recalcRaf = requestAnimationFrame(() => {
-      const vp = viewportRef.current,
-        track = trackRef.current;
-      if (!vp || !track) return;
-      const contentH = vp.scrollHeight,
-        viewH = vp.clientHeight,
-        trackH = track.clientHeight;
-      const minThumb = 48; // 提升最小高度以改善长文手感
-      const tH = Math.max(minThumb, (viewH / Math.max(contentH, 1)) * trackH);
-      const maxThumbTop = Math.max(trackH - tH, 0);
-      const maxScrollTop = Math.max(contentH - viewH, 1);
-      const tTop =
-        (vp.scrollTop / Math.max(1, maxScrollTop)) * Math.max(0, maxThumbTop);
-
-      sizesRef.current = { trackH, maxThumbTop, maxScrollTop };
-
-      setThumbH((prev) => (Math.abs(prev - tH) > 0.5 ? tH : prev));
-      setThumbTop((prev) =>
-        Number.isFinite(tTop) && Math.abs(prev - tTop) > 0.5 ? tTop : prev
-      );
-
-      if (thumbRef.current) {
-        thumbRef.current.style.top = `${Number.isFinite(tTop) ? tTop : 0}px`;
-      }
-    });
+  // 纸内“安全区”：在原始可视区域基础上四周内缩，避免文字或滚动条压到破边
+  const SAFE = { left: 22, right: 22, top: 1, bottom: 25 };
+  const contentBox = {
+    left: 67.86 + SAFE.left,
+    top: 24 + SAFE.top,
+    width: 867 - SAFE.left - SAFE.right,
+    height: 540 - SAFE.top - SAFE.bottom,
   };
 
-  // --- viewport scroll → rAF sync thumb (no setState in hot path) ---
-  let scrollRaf = 0;
+  // 自定义滚动条（轨道 + 拖拽的滑块）
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const trackRef = useRef<HTMLDivElement>(null);
+  const [thumbTop, setThumbTop] = useState(0);
+  const [thumbH, setThumbH] = useState(46);
+  const [dragging, setDragging] = useState(false);
+  const dragOffsetRef = useRef(0);
+  const sizesRef = useRef({ trackH: 1, maxThumbTop: 1, maxScrollTop: 1 });
+  const SCROLLBAR = { width: 12, gap: 10 };
+
+  // —— 尺寸与位置重算（内容变化/窗口变化/滚动时触发） —— //
+  const recalc = () => {
+    const vp = viewportRef.current,
+      track = trackRef.current;
+    if (!vp || !track) return;
+    const contentH = vp.scrollHeight,
+      viewH = vp.clientHeight,
+      trackH = track.clientHeight;
+    const minThumb = 30; // 最小拇指高度，避免太短
+    const tH = Math.max(minThumb, (viewH / Math.max(contentH, 1)) * trackH);
+    const maxThumbTop = Math.max(trackH - tH, 0);
+    const maxScrollTop = Math.max(contentH - viewH, 1);
+    const tTop = (vp.scrollTop / maxScrollTop) * maxThumbTop;
+    sizesRef.current = { trackH, maxThumbTop, maxScrollTop };
+    setThumbH(tH);
+    setThumbTop(Number.isFinite(tTop) ? tTop : 0);
+  };
+
   const onViewportScroll = () => {
     const vp = viewportRef.current;
     if (!vp) return;
-    cancelAnimationFrame(scrollRaf);
-    scrollRaf = requestAnimationFrame(() => {
-      const { maxThumbTop, maxScrollTop } = sizesRef.current;
-      const t =
-        (vp.scrollTop / Math.max(1, maxScrollTop)) * Math.max(0, maxThumbTop);
-      if (thumbRef.current) {
-        thumbRef.current.style.top = `${Number.isFinite(t) ? t : 0}px`;
-      }
-    });
+    const { maxThumbTop, maxScrollTop } = sizesRef.current;
+    const t = (vp.scrollTop / maxScrollTop) * maxThumbTop; // 拇指随内容滚动
+    setThumbTop(Number.isFinite(t) ? t : 0);
   };
 
   const onTrackClick: React.MouseEventHandler<HTMLDivElement> = (e) => {
@@ -907,18 +946,18 @@ function SessionsInsidePaper({
     const rect = track.getBoundingClientRect();
     const y = e.clientY - rect.top;
     const { maxThumbTop, maxScrollTop } = sizesRef.current;
-    const target = Math.min(Math.max(y - thumbH / 2, 0), maxThumbTop);
-    const ratio = target / Math.max(1, maxThumbTop);
-    vp.scrollTop = ratio * maxScrollTop;
+    const target = Math.min(Math.max(y - thumbH / 2, 0), maxThumbTop); // 点击轨道跳转
+    vp.scrollTop = (target / Math.max(1, maxThumbTop)) * maxScrollTop;
   };
 
   const onThumbMouseDown: React.MouseEventHandler<HTMLDivElement> = (e) => {
     e.preventDefault();
     const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
-    dragOffsetRef.current = e.clientY - rect.top;
+    dragOffsetRef.current = e.clientY - rect.top; // 记录按下位置与拇指顶部的偏移
     setDragging(true);
   };
 
+  // —— 处理拇指拖拽 —— //
   useEffect(() => {
     if (!dragging) return;
     const onMove = (e: MouseEvent) => {
@@ -929,11 +968,9 @@ function SessionsInsidePaper({
       const y = e.clientY - rect.top - dragOffsetRef.current;
       const { maxThumbTop, maxScrollTop } = sizesRef.current;
       const clamped = Math.min(Math.max(y, 0), maxThumbTop);
+      setThumbTop(clamped);
       const ratio = clamped / Math.max(1, maxThumbTop);
-      vp.scrollTop = ratio * maxScrollTop;
-      if (thumbRef.current) {
-        thumbRef.current.style.top = `${clamped}px`;
-      }
+      vp.scrollTop = ratio * maxScrollTop; // 反向驱动内容滚动
     };
     const onUp = () => setDragging(false);
     window.addEventListener("mousemove", onMove);
@@ -944,6 +981,7 @@ function SessionsInsidePaper({
     };
   }, [dragging]);
 
+  // —— 初始化与监听：尺寸变化 / 视口变化时重算拇指 —— //
   useEffect(() => {
     recalc();
     const ro = new ResizeObserver(recalc);
@@ -954,189 +992,120 @@ function SessionsInsidePaper({
     return () => {
       ro.disconnect();
       window.removeEventListener("resize", onR);
-      cancelAnimationFrame(recalcRaf);
-      cancelAnimationFrame(scrollRaf);
     };
   }, []);
 
-  // --- search: count hits and auto-jump to first on term change ---
-  useEffect(() => {
-    const vp = viewportRef.current;
-    if (!vp) {
-      onHitCount(0);
-      return;
-    }
-    requestAnimationFrame(() => {
-      const hits = vp.querySelectorAll<HTMLElement>("mark.search-hit");
-      onHitCount(hits.length);
-      if (searchTerm && hits.length > 0) {
-        const el = hits[0]!;
-        const offset =
-          el.getBoundingClientRect().top - vp.getBoundingClientRect().top;
-        vp.scrollBy({ top: offset - 40, behavior: "smooth" });
-      }
-    });
-  }, [searchTerm, onHitCount]);
-
-  // --- when activeHit changes, center it if needed ---
-  useEffect(() => {
-    const vp = viewportRef.current;
-    if (!vp) return;
-    const hits = vp.querySelectorAll<HTMLElement>("mark.search-hit");
-    hits.forEach((h) => h.classList.remove("search-hit--active"));
-    if (!hits.length) return;
-
-    const idx = Math.max(0, Math.min(activeHit, hits.length - 1));
-    const el = hits[idx]!;
-    el.classList.add("search-hit--active");
-
-    const vpRect = vp.getBoundingClientRect();
-    const elRect = el.getBoundingClientRect();
-    const top = elRect.top - vpRect.top;
-    if (top < 60 || top > vp.clientHeight - 80) {
-      vp.scrollBy({
-        top: top - vp.clientHeight / 2 + elRect.height / 2,
-        behavior: "smooth",
-      });
-    }
-  }, [activeHit, searchTerm]);
-
-  const heavy = blocks.length > 600 || (summary?.length ?? 0) > 200_000; // 超大文本时可关闭遮罩
-
   return (
     <>
-      {/* 捕获纸外滚轮并导入纸内视口，解决 body 锁滚导致的“滚不动” */}
       <div
         className="absolute"
-        style={{
-          left: 67.86,
-          top: 24,
-          width: 867,
-          height: 540,
-          zIndex: 2,
-          pointerEvents: "auto",
-        }}
-        onWheel={(e) => {
-          const vp = viewportRef.current;
-          if (!vp) return;
-          e.preventDefault();
-          vp.scrollBy({ top: e.deltaY, behavior: "auto" });
-        }}
+        style={{ ...contentBox, zIndex: 2, pointerEvents: "auto" }}
       >
+        {/* 真正滚动区：隐藏系统滚动条；PageDown/空格只在纸内生效 */}
         <div
+          id="sessionViewport"
+          ref={viewportRef}
+          onScroll={onViewportScroll}
+          className="absolute overflow-y-auto"
+          style={{
+            inset: 0,
+            padding: "6px 8px 36px 12px",
+            paddingRight: SCROLLBAR.width + SCROLLBAR.gap + 8, // 给自定义滚动条让位
+            fontFamily: '"Inter", sans-serif',
+            fontWeight: 700,
+            fontSize: 20,
+            lineHeight: "40px",
+            color: "#000",
+            WebkitOverflowScrolling: "touch",
+            overscrollBehavior: "contain", // 阻止滚动传导到整个页面
+            scrollbarWidth: "none",
+            msOverflowStyle: "none", // 隐藏系统滚动条（Firefox/旧 Edge）
+            touchAction: "pan-y", // 限制触控手势为纵向
+          }}
+          tabIndex={0}
+          onKeyDown={(e) => {
+            const vp = viewportRef.current;
+            if (!vp) return;
+            const page = vp.clientHeight - 40; // “一页”的步长（保留 40px 重叠）
+            if (["PageDown", "PageUp", " "].includes(e.key)) e.preventDefault();
+            if (e.key === "PageDown" || e.key === " ")
+              vp.scrollBy({ top: page, behavior: "smooth" });
+            if (e.key === "PageUp")
+              vp.scrollBy({ top: -page, behavior: "smooth" });
+          }}
+        >
+          {/* 顶/底渐隐，营造“从纸里冒出”的视觉 */}
+          <div
+            style={{
+              WebkitMaskImage:
+                "linear-gradient(to bottom, transparent 0, black 20px, black calc(100% - 20px), transparent 100%)",
+              maskImage:
+                "linear-gradient(to bottom, transparent 0, black 20px, black calc(100% - 20px), transparent 100%)",
+            }}
+          >
+            {blocks.map((blk, i) => (
+              <div key={i} className="mb-4">
+                <div className="flex items-start gap-2">
+                  <img
+                    src="/dragon.png"
+                    alt=""
+                    style={{ width: 26, height: 26, marginTop: 6 }}
+                    onError={(e) =>
+                      ((e.target as HTMLImageElement).style.display = "none")
+                    }
+                  />
+                  <div className="font-extrabold">
+                    {renderHighlighted(blk.title)}
+                  </div>
+                </div>
+                {blk.body && (
+                  <div className="whitespace-pre-wrap mt-1">
+                    {renderHighlighted(blk.body)}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* 自定义滚动条（完全在安全区内，受纸外层 overflow:hidden 裁剪） */}
+        <div
+          ref={trackRef}
+          onMouseDown={(e) => {
+            if ((e.target as HTMLElement).dataset.role !== "thumb")
+              onTrackClick(e);
+          }}
           className="absolute"
-          style={{ ...contentBox, zIndex: 2, pointerEvents: "auto" }}
+          style={{
+            right: SCROLLBAR.gap,
+            top: 10,
+            bottom: 10,
+            width: SCROLLBAR.width,
+            borderRadius: 10,
+            background: "rgba(0,0,0,0.18)",
+            boxShadow: "inset 0 0 0 1px rgba(0,0,0,0.08)",
+            cursor: "pointer",
+          }}
         >
           <div
-            id="sessionViewport"
-            ref={viewportRef}
-            onScroll={onViewportScroll}
-            className="absolute overflow-y-auto"
+            data-role="thumb"
+            onMouseDown={onThumbMouseDown}
+            className="absolute left-1/2 -translate-x-1/2"
             style={{
-              inset: 0,
-              padding: "6px 8px 12px 12px",
-              paddingRight: SCROLLBAR.width + SCROLLBAR.gap + 8,
-              fontFamily: '"Inter", sans-serif',
-              fontWeight: 700,
-              fontSize: 20,
-              lineHeight: "40px",
-              color: "#000",
-              WebkitOverflowScrolling: "touch",
-              overscrollBehavior: "contain",
-              scrollbarWidth: "none",
-              msOverflowStyle: "none",
-              touchAction: "pan-y",
+              top: `${thumbTop}px`,
+              width: SCROLLBAR.width - 4,
+              height: `${thumbH}px`,
+              borderRadius: 8,
+              background: "rgba(61,35,4,0.75)",
+              boxShadow: "inset 0 0 0 2px rgba(255,255,255,0.5)",
+              cursor: dragging ? "grabbing" : "grab",
             }}
-            tabIndex={0}
-            onKeyDown={(e) => {
-              const vp = viewportRef.current;
-              if (!vp) return;
-              const page = vp.clientHeight - 40;
-              if (["PageDown", "PageUp", " "].includes(e.key))
-                e.preventDefault();
-              if (e.key === "PageDown" || e.key === " ")
-                vp.scrollBy({ top: page, behavior: "smooth" });
-              if (e.key === "PageUp")
-                vp.scrollBy({ top: -page, behavior: "smooth" });
-            }}
-          >
-            <div
-              style={
-                heavy
-                  ? undefined
-                  : {
-                      WebkitMaskImage:
-                        "linear-gradient(to bottom, transparent 0, black 20px, black calc(100% - 20px), transparent 100%)",
-                      maskImage:
-                        "linear-gradient(to bottom, transparent 0, black 20px, black calc(100% - 20px), transparent 100%)",
-                    }
-              }
-            >
-              {blocks.map((blk, i) => (
-                <div key={i} className="mb-4">
-                  <div className="flex items-start gap-2">
-                    <img
-                      src="/dragon.png"
-                      alt=""
-                      style={{ width: 26, height: 26, marginTop: 6 }}
-                      onError={(e) =>
-                        ((e.target as HTMLImageElement).style.display = "none")
-                      }
-                    />
-                    <div className="font-extrabold">
-                      {renderHighlighted(blk.title)}
-                    </div>
-                  </div>
-                  {blk.body && (
-                    <div className="whitespace-pre-wrap mt-1">
-                      {renderHighlighted(blk.body)}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* 自定义滚动条 */}
-          <div
-            ref={trackRef}
-            onMouseDown={(e) => {
-              if ((e.target as HTMLElement).dataset.role !== "thumb")
-                onTrackClick(e);
-            }}
-            className="absolute"
-            style={{
-              right: SCROLLBAR.gap,
-              top: 10,
-              bottom: 10,
-              width: SCROLLBAR.width,
-              borderRadius: 10,
-              background: "rgba(0,0,0,0.18)",
-              boxShadow: "inset 0 0 0 1px rgba(0,0,0,0.08)",
-              cursor: "pointer",
-            }}
-          >
-            <div
-              ref={thumbRef}
-              data-role="thumb"
-              onMouseDown={onThumbMouseDown}
-              className="absolute left-1/2 -translate-x-1/2"
-              style={{
-                top: `${thumbTop}px`,
-                width: SCROLLBAR.width - 4,
-                height: `${thumbH}px`,
-                borderRadius: 8,
-                background: "rgba(61,35,4,0.75)",
-                boxShadow: "inset 0 0 0 2px rgba(255,255,255,0.5)",
-                cursor: dragging ? "grabbing" : "grab",
-                willChange: "top",
-              }}
-              title="Drag to scroll"
-            />
-          </div>
+            title="Drag to scroll"
+          />
         </div>
       </div>
 
+      {/* 彻底隐藏 WebKit 的系统滚动条，避免“纸外出现滚条”的错觉 */}
       <style jsx>{`
         #sessionViewport::-webkit-scrollbar {
           width: 0;
@@ -1387,6 +1356,18 @@ export default function RecordPage() {
   const [hitCount, setHitCount] = useState(0);
   const [activeHit, setActiveHit] = useState(0);
 
+  // 一旦输入框内容变化，清空之前的搜索结果
+  useEffect(() => {
+    (window as any).onSearchClear = () => {
+      setSearchTerm("");
+      setHitCount(0);
+      setActiveHit(0);
+    };
+    return () => {
+      delete (window as any).onSearchClear;
+    };
+  }, []);
+
   // 切换视图时清空搜索与命中导航（保持与截图一致）
   const onChangeView = (v: "sessions" | "character") => {
     setView(v);
@@ -1408,6 +1389,7 @@ export default function RecordPage() {
       setActiveHit(0);
     } else {
       setCharSearchKey(key); // character 视图用这个
+      setCharSearchTick((t) => t + 1); // 只有按下 Enter 提交时才触发动画
     }
   };
 
@@ -1432,14 +1414,16 @@ export default function RecordPage() {
   const [dragging, setDragging] = useState(false);
   const dragOffsetRef = useRef(0);
   const sizesRef = useRef({ trackH: 1, maxThumbTop: 1, maxScrollTop: 1 });
+  const SCROLLBAR = { width: 12, gap: 10 };
 
+  // —— 尺寸与位置重算（内容变化/窗口变化/滚动时触发） —— //
   const recalc = () => {
     const vp = viewportRef.current,
       track = trackRef.current;
     if (!vp || !track) return;
-    const contentH = vp.scrollHeight;
-    const viewH = vp.clientHeight;
-    const trackH = track.clientHeight;
+    const contentH = vp.scrollHeight,
+      viewH = vp.clientHeight,
+      trackH = track.clientHeight;
     const minThumb = 36;
     const tH = Math.max(
       minThumb,
@@ -2059,6 +2043,7 @@ export default function RecordPage() {
   const [charLoading, setCharLoading] = useState(true);
   const [charCur, setCharCur] = useState(0);
   const [charSearchKey, setCharSearchKey] = useState("");
+  const [charSearchTick, setCharSearchTick] = useState(0);
   const [currentCampaignId, setCurrentCampaignId] = useState<string>("");
 
   // Fetch character roles from database
