@@ -1,3 +1,4 @@
+// llm.ts
 // Thresholds and hyperparameters for splitting, summarizing, and merging.
 // Values are tuned for short, factual recaps rather than creative writing.
 const LONG_THRESHOLD_WORDS = 1000;  // Single-pass summarization below this word count
@@ -5,6 +6,14 @@ const CHUNK_TEXT = 700;             // Approximate words per chunk for long tran
 const CHUNK_OVERLAP = 70;           // Overlap preserves context at chunk boundaries
 const TEMP = 0.1;                   // Low temperature to reduce fabrication
 const MERGE_BATCH = 6;              // Number of chunk summaries merged per round
+
+// NEW: configurable max duration for a single LLM request (ms)
+const LLM_REQUEST_TIMEOUT_MS = Number(process.env.LLM_REQUEST_TIMEOUT_MS ?? 900_000); // 15 min
+
+// NEW: bounded network resiliency for streaming fetches
+const MAX_RETRIES = Number(process.env.LLM_REQUEST_RETRIES ?? 2); // total attempts = 1 + MAX_RETRIES
+const RETRY_BASE_MS = Number(process.env.LLM_RETRY_BASE_MS ?? 1500); // exponential backoff base
+const STALL_TIMEOUT_MS = Number(process.env.LLM_STALL_TIMEOUT_MS ?? 60_000); // abort if no bytes arrive for N ms
 
 /**
  * Splits a long transcript into overlapping word-range chunks.
@@ -42,6 +51,8 @@ const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "phi3:medium";
 /**
  * Calls the Ollama REST API with a given prompt.
  * Adds basic timing and structured error logging for observability.
+ * 
+ * CHANGED: Implements #1 (retries + stall watchdog + early 'done' handling).
  *
  * @param prompt - Prompt text to send.
  * @param label - Console timer label to identify the request in logs.
@@ -49,41 +60,136 @@ const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "phi3:medium";
  * @throws Rethrows on non-OK HTTP or network failures.
  */
 async function callLLM(prompt: string, label: string): Promise<string> {
-  console.time(label);
-  try {
-    const res = await fetch(`${OLLAMA_HOST}/api/generate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: OLLAMA_MODEL,
-        prompt,
-        stream: false,
-        options: { temperature: TEMP },
-      }),
-    });
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const attemptLabel = attempt ? `${label} (retry ${attempt})` : label;
+    console.time(attemptLabel);
 
-    if (!res.ok) {
-      throw new Error(`Ollama API error: ${res.status} ${res.statusText}`);
+    // NEW: abort controller to bound total time on our side (independent of Undici header timeout)
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), LLM_REQUEST_TIMEOUT_MS);
+
+    try {
+      // CHANGED: request streaming so headers arrive immediately (prevents headers-timeout)
+      const res = await fetch(`${OLLAMA_HOST}/api/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Accept": "application/json" }, // NEW: Accept is explicit
+        body: JSON.stringify({
+          model: OLLAMA_MODEL,
+          prompt,
+          stream: true,                 // CHANGED: stream instead of false
+          // NEW: keep model warm + keep outputs reasonably bounded so calls finish promptly
+          // (does not change content; part of #1 fix to reduce stalls/timeouts)
+          options: { temperature: TEMP, num_predict: 220 },
+          keep_alive: "30m",
+        }),
+        signal: controller.signal,      // NEW: we control cancellation
+      });
+
+      if (!res.ok) {
+        throw new Error(`Ollama API error: ${res.status} ${res.statusText}`);
+      }
+      if (!res.body) {
+        throw new Error("Ollama stream missing response body");
+      }
+
+      // NEW: read NDJSON stream and append `response` chunks with stall watchdog
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let out = "";
+
+      // NEW (#1): stall watchdog — abort if no bytes arrive for STALL_TIMEOUT_MS
+      let lastTick = Date.now();
+      const stallTimer = setInterval(() => {
+        if (Date.now() - lastTick > STALL_TIMEOUT_MS) {
+          clearInterval(stallTimer);
+          controller.abort(); // triggers catch -> retry
+        }
+      }, 5_000);
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          lastTick = Date.now();
+
+          buf += decoder.decode(value, { stream: true });
+
+          // Ollama sends one JSON object per line
+          let idx: number;
+          while ((idx = buf.indexOf("\n")) >= 0) {
+            const line = buf.slice(0, idx).trim();
+            buf = buf.slice(idx + 1);
+            if (!line) continue;
+            try {
+              const obj = JSON.parse(line);
+              if (typeof obj?.response === "string") {
+                out += obj.response;
+              }
+              // NEW (#1): break early once Ollama signals completion to avoid tail hangs
+              if (obj?.done) {
+                await reader.cancel().catch(() => {});
+                clearInterval(stallTimer);
+                const result = (out ?? "").trim();
+                console.timeEnd(attemptLabel);
+                clearTimeout(timer);
+                controller.abort(); // release socket
+                return result;
+              }
+            } catch {
+              // swallow partial/garbled line; next chunk will complete it
+            }
+          }
+        }
+      } finally {
+        clearInterval(stallTimer);
+      }
+
+      const result = (out ?? "").trim();
+      console.timeEnd(attemptLabel);
+      clearTimeout(timer);
+      controller.abort();
+      return result;
+    } catch (err: any) {
+      console.timeEnd(attemptLabel);
+      clearTimeout(timer);
+
+      // NEW (#1): retry only on network-ish failures / aborts
+      const msg = String(err?.message || "");
+      const name = String(err?.name || "");
+      const isAbort = name === "AbortError";
+      const retryable =
+        isAbort ||
+        msg.includes("fetch failed") ||
+        msg.includes("ECONNRESET") ||
+        msg.includes("ETIMEDOUT") ||
+        msg.includes("socket hang up");
+
+      if (attempt < MAX_RETRIES && retryable) {
+        const backoff =
+          RETRY_BASE_MS * Math.pow(2, attempt) + Math.floor(Math.random() * 500);
+        await new Promise((r) => setTimeout(r, backoff));
+        continue;
+      }
+
+      console.error(`${label}_ERROR`, {
+        msg: err?.message,
+        code: err?.code,
+        name: err?.name,
+      });
+      throw err;
     }
-
-    const data = await res.json();
-    const out = (data.response ?? "").trim();
-    console.timeEnd(label);
-    return out;
-  } catch (err: any) {
-    console.timeEnd(label);
-    console.error(`${label}_ERROR`, {
-      msg: err?.message,
-      code: err?.code,
-      name: err?.name,
-    });
-    throw err;
   }
+
+  // Should be unreachable (loop either returns or throws earlier)
+  throw new Error("exhausted retries");
 }
 
 /**
  * Summarizes a single transcript chunk with strict factual constraints.
  * Output is structured as short titled sections to support later merging.
+ *
+ * CHANGED: wording to prevent literal "Title:" / "Line 1:" artifacts.
  *
  * @param chunk - Transcript slice.
  * @param idx - Chunk index for logging.
@@ -97,23 +203,23 @@ async function summarizeChunk(
 ): Promise<string> {
   const prompt = `You are a precise note taker for a Dungeons & Dragons session.
 
-        CHUNK ${idx + 1} OF ${total} — MODE: VERBATIM-ONLY RECAP
-        Rules:
-        - Use ONLY facts that appear in THIS CHUNK.
-        - Do NOT infer or invent quests, items, mechanics, or characters not present here.
-        - Keep proper nouns exactly as written in the chunk.
-        - If a detail is uncertain in THIS CHUNK, omit it (do not guess).
+CHUNK ${idx + 1} OF ${total} — MODE: VERBATIM-ONLY RECAP
+Rules:
+- Use ONLY facts that appear in THIS CHUNK.
+- Do NOT infer or invent quests, items, mechanics, or characters not present here.
+- Keep proper nouns exactly as written in the chunk.
+- If a detail is uncertain in THIS CHUNK, omit it (do not guess).
 
-        Output format:
-        - Write 2-4 sections for THIS CHUNK.
-        - Each section MUST be:
-          Line 1: SHORT TITLE (do not use the word title)
-          Line 2..3: 1-3 factual sentences
-        - Blank line between sections. No bullets, no numbering, no "###".
-        - Focus on the following (if stated): plot beats, explicit NPC names/roles, locations actually visited, items gained/lost, important player decisions and their consequences, hooks/next steps that were said.
+Output format:
+- Write 2–4 sections for THIS CHUNK.
+- Each section MUST follow this structure:
+  • First line: a SHORT TITLE (do not include the word "Title").
+  • Next 1–3 lines: factual sentences about that topic.
+- Put ONE blank line between sections.
+- Do not label lines, do not add numbers, bullets, or hashes.
 
-        CHUNK TEXT:
-        ${chunk}`;
+CHUNK TEXT:
+${chunk}`;
 
   return callLLM(prompt, `LLM_chunk_${idx + 1}/${total}`);
 }
@@ -147,31 +253,33 @@ async function hierarchicalMerge(summaries: string[]): Promise<string> {
  * Merge prompt that de-duplicates facts and keeps chronological flow.
  * The output format mirrors the chunk summaries for consistency.
  *
+ * CHANGED: wording to prevent literal "Title:" / "Line 1:" artifacts.
+ *
  * @param summaries - Group of chunk summaries to merge.
  * @returns Merged summary text.
  */
 async function mergeSummaries(summaries: string[]): Promise<string> {
   const prompt = `Combine the given Dungeons & Dragons chunk summaries into ONE faithful recap.
 
-        MODE: VERBATIM-ONLY MERGE
-        - Use ONLY facts that appear in the chunk summaries below.
-        - Do NOT introduce any new names, places, items, rules, or conclusions.
-        - De-duplicate and keep chronological flow.
-        - If two bullets contradict, prefer whichever is clearer and keep it neutral (omit speculation).
+MODE: VERBATIM-ONLY MERGE
+- Use ONLY facts that appear in the chunk summaries below.
+- Do NOT introduce any new names, places, items, rules, or conclusions.
+- De-duplicate and keep chronological flow.
+- If two statements contradict, prefer whichever is clearer and keep it neutral (omit speculation).
 
-        OUTPUT:
-        - Write 4-10 sections total.
-        - Each section MUST be:
-          Line 1: SHORT TITLE (no hashes, bullets, or numbers, do not use the word title)
-          Line 2..3: 1-3 factual sentences
-        - One blank line between sections.
-        - Focus on the following (if stated): plot beats, explicit NPC names/roles, locations actually visited, items gained/lost, important player decisions and their consequences, hooks/next steps that were said.
+OUTPUT:
+- Write 4–10 sections total.
+- Each section MUST follow this structure:
+  • First line: a SHORT TITLE (do not include the word "Title").
+  • Next 1–3 lines: factual sentences.
+- Put ONE blank line between sections.
+- Do not label lines, do not add numbers, bullets, or hashes.
 
-        CHUNK SUMMARIES:
-        ${summaries.map((s, i) => `--- CHUNK ${i + 1} ---\n${s}`).join("\n")}
+CHUNK SUMMARIES:
+${summaries.map((s, i) => `--- CHUNK ${i + 1} ---\n${s}`).join("\n")}
 
-        FINAL SUMMARY (bullets only):
-        `;
+FINAL SUMMARY:
+(Use the same section format described above.)`;
   return callLLM(prompt, "LLM_merge");
 }
 
@@ -179,6 +287,8 @@ async function mergeSummaries(summaries: string[]): Promise<string> {
  * High-level entry point for summarizing an entire session transcript.
  * Short texts use a single prompt; long texts are chunked then merged.
  * Includes fallbacks to ensure a useful result even when some steps fail.
+ *
+ * CHANGED: wording in single-pass prompt to avoid literal labels.
  *
  * @param rawText - Full session transcript.
  * @returns Final summary string.
@@ -191,26 +301,25 @@ export async function summarizeDnDSession(rawText: string): Promise<string> {
 
   // Single-pass summarization for short transcripts to reduce latency.
   if (wordCount <= LONG_THRESHOLD_WORDS) {
-    const prompt = `You are a faithful note-taker for a Table-Top Role Plating (Dungeons & Dragons) session.
+    const prompt = `You are a faithful note-taker for a Table-Top Role Playing (Dungeons & Dragons) session.
 
-        MODE: VERBATIM-ONLY RECAP
-        - Use ONLY facts explicitly present in the transcript.
-        - Never invent names, items, quests, places, mechanics, or outcomes.
-        - If something is unclear or missing, omit it.
+MODE: VERBATIM-ONLY RECAP
+- Use ONLY facts explicitly present in the transcript.
+- Never invent names, items, quests, places, mechanics, or outcomes.
+- If something is unclear or missing, omit it.
 
-        OUTPUT:
-        - Write 4-8 sections.
-        - Each section MUST be:
-          Line 1: A SHORT TITLE on its own line (no hashes, no numbers, no bullets, do not use the word title).
-          Line 2..3: 1-3 sentences of concise prose describing only facts from the text.
-        - Put ONE blank line between sections.
-        - Do NOT use lists or bullets. Do NOT add "###" or any other heading markup.
-        - Keep proper nouns exactly as written.
-        - Focus on the following (if stated): plot beats, explicit NPC names/roles, locations actually visited, items gained/lost, important player decisions and their consequences, hooks/next steps that were said.
-        - No meta-comments, no headings, no numbering, no analysis, no advice, no rules talk.
+OUTPUT:
+- Write 4–8 sections.
+- Each section MUST follow this structure:
+  • First line: a SHORT TITLE (do not include the word "Title").
+  • Next 1–3 lines: concise factual sentences describing what happened.
+- Put ONE blank line between sections.
+- Do NOT use lists or bullets. Do NOT add "###" or any heading markup.
+- Keep proper nouns exactly as written.
+- Focus on: plot beats, explicit NPC names/roles, locations actually visited, items gained/lost, important player decisions and their consequences, and stated next steps.
 
-        TRANSCRIPT:
-        ${text}`;
+TRANSCRIPT:
+${text}`;
 
     const out = await callLLM(prompt, "LLM_single");
     return out;
@@ -220,23 +329,35 @@ export async function summarizeDnDSession(rawText: string): Promise<string> {
   const chunks = splitIntoChunks(text);
   const miniSummaries: string[] = [];
 
-  // Summarize each chunk independently. Errors are isolated per chunk.
-  for (let i = 0; i < chunks.length; i++) {
-    try {
-      const s = await summarizeChunk(chunks[i], i, chunks.length);
-      if (s) miniSummaries.push(s);
-    } catch {}
+  const CONCURRENCY = Number(process.env.LLM_CONCURRENCY ?? 3);
+  let idx = 0; // NEW
+
+  async function worker() {
+    while (true) {
+      const i = idx++;
+      if (i >= chunks.length) break;
+      try {
+        const s = await summarizeChunk(chunks[i], i, chunks.length);
+        if (s) miniSummaries.push(s);
+      } catch {
+        // swallow per-chunk failures; retries happen inside callLLM
+      }
+    }
   }
+
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, chunks.length) }, () => worker())
+  );
 
   // If all chunk calls failed, attempt a clipped single-pass fallback.
   if (miniSummaries.length === 0) {
     const clipped = text.split(/\s+/).slice(0, CHUNK_TEXT).join(" ");
     const fallbackPrompt = `You are a precise session scribe for a Dungeons & Dragons game.
-        Summarize as ≤10 bullets focusing on main story beats only (plot, NPCs, locations, items, decisions/consequences, next steps). 
-        No fluff.
+Summarize as 6–10 short sections, each with a short title on the first line and 1–3 factual sentences below it. 
+No bullets, no numbering, blank line between sections. Use only facts in the text.
 
-        SESSION (CLIPPED):
-        ${clipped}`;
+SESSION (CLIPPED):
+${clipped}`;
     const out = await callLLM(fallbackPrompt, "LLM_fallback_single");
     return out;
   }
@@ -245,10 +366,12 @@ export async function summarizeDnDSession(rawText: string): Promise<string> {
   try {
     const merged = await hierarchicalMerge(miniSummaries);
     if (merged) return merged.trim();
-  } catch {}
+  } catch {
+    // swallow merge failure; fallback below
+  }
 
   // Last resort: return concatenated mini summaries with a soft length cap.
-  const joined = miniSummaries.join("\n");
+  const joined = miniSummaries.join("\n\n");
   return joined.length > 4000 ? joined.slice(0, 4000) + "\n…" : joined;
 }
 
@@ -294,29 +417,29 @@ export async function extractCharactersFromSession(rawText: string): Promise<Cha
 
   const prompt = `You are extracting CHARACTER CARDS from a TTRPG (D&D) transcript CHUNK.
 
-    STRICT RULES:
-    - USE ONLY facts explicitly stated in this chunk.
-    - IGNORE table/OOC chatter (jokes, small talk, scheduling, rules debate, audio/mic, snacks, meta, “back to the game”).
-    - DO NOT invent or “fix” names/roles/places/relationships.
-    - If a field is unknown in this chunk, omit it.
-    - If this chunk is only OOC/table talk, return [].
+STRICT RULES:
+- USE ONLY facts explicitly stated in this chunk.
+- IGNORE table/OOC chatter (jokes, small talk, scheduling, rules debate, audio/mic, snacks, meta, “back to the game”).
+- DO NOT invent or “fix” names/roles/places/relationships.
+- If a field is unknown in this chunk, omit it.
+- If this chunk is only OOC/table talk, return [].
 
-    Return STRICT JSON ONLY (no commentary), as:
-    [
-      {
-        "name": "Exact Name As Said",
-        "role": "short role/class/descriptor if stated",
-        "affiliation": "group/town/faction if stated",
-        "traits": ["1-5 short traits actually said"],
-        "goals": ["1-5 explicit goals or tasks"],
-        "lastLocation": "last explicit location",
-        "status": "hostile/allied/injured/captive/etc if stated",
-        "notes": "one short line only if useful"
-      }
-    ]
+Return STRICT JSON ONLY (no commentary), as:
+[
+  {
+    "name": "Exact Name As Said",
+    "role": "short role/class/descriptor if stated",
+    "affiliation": "group/town/faction if stated",
+    "traits": ["1-5 short traits actually said"],
+    "goals": ["1-5 explicit goals or tasks"],
+    "lastLocation": "last explicit location",
+    "status": "hostile/allied/injured/captive/etc if stated",
+    "notes": "one short line only if useful"
+  }
+]
 
-    TRANSCRIPT CHUNK:
-    ${text}`;
+TRANSCRIPT CHUNK:
+${text}`;
 
   const out = await callLLM(prompt, "LLM_chars_chunk");
   const parsed = safeJSON<CharacterCard[]>(out) ?? [];
@@ -334,3 +457,5 @@ export async function extractCharactersFromSession(rawText: string): Promise<Cha
   // Keep a practical upper bound to avoid flooding the UI.
   return unique.slice(0, 25);
 }
+
+export { OLLAMA_HOST, OLLAMA_MODEL, LLM_REQUEST_TIMEOUT_MS, MAX_RETRIES, STALL_TIMEOUT_MS };

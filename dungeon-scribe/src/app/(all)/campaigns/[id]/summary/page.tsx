@@ -936,7 +936,7 @@ function CharacterCarouselStacked({
                     {data.name}
                   </div>
                   <div
-                    className="text-[#333]"
+                    className="text-[#333] whitespace-pre-line"
                     style={{
                       fontFamily: '"Inter", sans-serif',
                       fontSize: 15,
@@ -1042,7 +1042,7 @@ function CharacterCarouselStacked({
                 {data.name}
               </div>
               <div
-                className="text-[#333]"
+                className="text-[#333] whitespace-pre-line"
                 style={{
                   fontFamily: '"Inter", sans-serif',
                   fontSize: 15,
