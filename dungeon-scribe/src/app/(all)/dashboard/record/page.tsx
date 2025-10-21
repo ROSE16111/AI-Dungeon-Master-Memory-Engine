@@ -1609,8 +1609,8 @@ export default function RecordPage() {
   async function getCampaignId(): Promise<string | null> {
     try {
       const res = await fetch("/api/current-campaign", { method: "GET" });
-      const { id } = await res.json();
-      return id || null;
+      const j = await res.json();
+      return j?.id ?? j?.item?.id ?? null;  
     } catch {
       return null;
     }
@@ -1638,6 +1638,30 @@ export default function RecordPage() {
     return ws;
   }
 
+  function startPauseKeepAlive(sess: any) {
+    try {
+      if (!sess || !sess.ws) return;
+      stopPauseKeepAlive(sess); // just in case
+      sess._keepAliveId = window.setInterval(() => {
+        try {
+          if (sess.ws && sess.ws.readyState === WebSocket.OPEN) {
+            // benign JSON that server will just ignore
+            sess.ws.send(JSON.stringify({ type: "ping" }));
+          }
+        } catch {}
+      }, 3000); // every 3s is plenty
+    } catch {}
+  }
+
+  function stopPauseKeepAlive(sess: any) {
+    try {
+      if (sess && sess._keepAliveId) {
+        clearInterval(sess._keepAliveId);
+        sess._keepAliveId = null;
+      }
+    } catch {}
+  }
+
   /** Ensure we have an OPEN socket; recreate & update __asrSession if needed. */
   async function ensureOpenSocket(sess: any): Promise<WebSocket> {
     const cur: WebSocket | undefined = sess?.ws;
@@ -1647,49 +1671,60 @@ export default function RecordPage() {
     return ws;
   }
 
-
   // START recording
   const startRecording = async () => {
     // Do NOT clear transcript/summary here — keep previous speech-to-text content.
-
     if (isRecording) return;
 
-    // If a paused session exists, try to resume it instead of creating a new one
+    // ✅ If a paused session exists, reopen WS if needed and rewire the worklet
     const existing = (window as any).__asrSession || null;
     if (existing && (existing as any).paused) {
       try {
-          const ws = existing.ws;
-          const node = existing.node;
-          // Re-bind WS handlers to resume receiving results
-          if (ws instanceof WebSocket) bindWsHandlers(ws);
-          try {
-            const res = await fetch("/api/current-campaign", { method: "GET" });
-            const { id: resumedCampaignId } = await res.json();
-            if (resumedCampaignId) {
-              ws.send(JSON.stringify({ type: "set_campaign", campaignId: resumedCampaignId }));
-              console.log("[ASR] re-sent set_campaign on resume:", resumedCampaignId);
-            }
-          } catch {}
-          // Re-attach worklet send handler so audio resumes being sent
-          if (node && node.port) {
-            node.port.onmessage = (ev: any) => {
-              const ab = ev.data as ArrayBuffer;
-              try {
-                if (ws && ws.readyState === WebSocket.OPEN) ws.send(ab);
-              } catch {}
-            };
-            node.port.onmessageerror = (e: any) =>
-              console.warn("[ASR] worklet port message error", e);
-          }
-          (existing as any).paused = false;
-          setIsRecording(true);
-          console.log("[ASR] resumed paused session");
-          return;
-        } catch (e) {
-          console.warn("Failed to resume paused session, starting fresh", e);
+        // 1) Make sure the AudioContext is running
+        const ctx: AudioContext | undefined = existing.ctx;
+        if (ctx && ctx.state === "suspended") {
+          try { await ctx.resume(); } catch {}
         }
-      }
 
+        // 2) Ensure we have an OPEN websocket (recreate if the server closed it after idle)
+        const ws: WebSocket = await ensureOpenSocket(existing);
+
+        // 3) Re-bind WS handlers (so we receive results again)
+        bindWsHandlers(ws);
+
+        // 4) Re-send campaign context
+        try {
+          const resumedCampaignId = await getCampaignId();
+          if (resumedCampaignId && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "set_campaign", campaignId: resumedCampaignId }));
+            console.log("[ASR] re-sent set_campaign on resume:", resumedCampaignId);
+          }
+        } catch {}
+
+        // 5) Re-attach worklet send handler so audio resumes streaming
+        const node: AudioWorkletNode | undefined = existing.node;
+        if (node && node.port) {
+          node.port.onmessage = (ev: any) => {
+            const ab = ev.data as ArrayBuffer;
+            try {
+              if (ws && ws.readyState === WebSocket.OPEN) ws.send(ab);
+            } catch {}
+          };
+          node.port.onmessageerror = (e: any) =>
+            console.warn("[ASR] worklet port message error", e);
+        }
+        stopPauseKeepAlive(existing);
+        (existing as any).paused = false;
+        setIsRecording(true);
+        console.log("[ASR] resumed paused session");
+        return; // ← done, we resumed successfully
+      } catch (e) {
+        console.warn("Failed to resume paused session, starting fresh", e);
+        // fall through to fresh start
+      }
+    }
+
+    // ---- Fresh start path (unchanged except for using wsURL()/bindWsHandlers) ----
     try {
       // ask for mic
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -1702,16 +1737,12 @@ export default function RecordPage() {
       });
 
       // AudioContext + Worklet
-      const ctx = new (window.AudioContext ||
-        (window as any).webkitAudioContext)({ sampleRate: 16000 });
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
       if (ctx.state === "suspended") {
         await ctx.resume();
       }
 
-      const moduleUrl = new URL(
-        "/worklets/pcm16-frames.js",
-        window.location.origin
-      );
+      const moduleUrl = new URL("/worklets/pcm16-frames.js", window.location.origin);
       moduleUrl.searchParams.set("v", Date.now().toString());
       await ctx.audioWorklet.addModule(moduleUrl.toString());
 
@@ -1726,31 +1757,19 @@ export default function RecordPage() {
       node.connect(sink).connect(ctx.destination);
 
       // WebSocket
-      // const ws = new WebSocket(
-      //   (function () {
-      //     if (
-      //       typeof process !== "undefined" &&
-      //       process.env.NEXT_PUBLIC_ASR_WS
-      //     ) {
-      //       return process.env.NEXT_PUBLIC_ASR_WS!;
-      //     }
-      //     const proto = window.location.protocol === "https:" ? "wss" : "ws";
-      //     return `${proto}://${window.location.hostname}:8000/audio`;
-      //   })()
-      // );
-      // 1) 创建 WS（建议用你已经写好的 wsURL()）
       const base = wsURL();
       const res = await fetch("/api/current-campaign", { method: "GET" });
       const { id: campaignId } = await res.json();
-      const ws = new WebSocket(campaignId ? `${base}?campaignId=${encodeURIComponent(campaignId)}` : base);
+      const ws = new WebSocket(
+        campaignId ? `${base}?campaignId=${encodeURIComponent(campaignId)}` : base
+      );
 
-      // 2) 绑定统一的事件处理器（open/close/error/message 全在里面）
+      // Bind handlers
       bindWsHandlers(ws);
 
-      // 3) 仍然保留队列 + flush 逻辑（改为 addEventListener，不会覆盖 bindWsHandlers 的 onopen）
+      // queue for early audio until ws opens
       const queue: ArrayBuffer[] = [];
       let open = false;
-
       ws.addEventListener("open", () => {
         open = true;
         if (campaignId) {
@@ -1758,19 +1777,14 @@ export default function RecordPage() {
         }
         while (queue.length) {
           const buf = queue.shift()!;
-          try {
-            ws.send(buf);
-          } catch {}
+          try { ws.send(buf); } catch {}
         }
       });
 
-      // 4) audio worklet 采样/发送逻辑保持原样
       node.port.onmessage = (ev) => {
         const ab = ev.data as ArrayBuffer;
         if (open && ws.readyState === WebSocket.OPEN) {
-          try {
-            ws.send(ab);
-          } catch {}
+          try { ws.send(ab); } catch {}
         } else {
           queue.push(ab);
           if (queue.length > 200) queue.splice(0, queue.length - 200);
@@ -1779,7 +1793,7 @@ export default function RecordPage() {
       node.port.onmessageerror = (e) =>
         console.warn("[ASR] worklet port message error", e);
 
-      // 5) 存回全局句柄
+      // Save session handle
       (window as any).__asrSession = { ctx, source, node, sink, ws, stream };
     } catch (err) {
       console.error(err);
@@ -1787,6 +1801,7 @@ export default function RecordPage() {
       setIsRecording(false);
     }
   };
+
 
   // Pause recording: keep session objects in memory so they can be resumed.
   const stopRecording = () => {
@@ -1801,6 +1816,8 @@ export default function RecordPage() {
           sess.node.port.onmessageerror = null;
         } catch {}
       }
+
+      startPauseKeepAlive(sess);
 
       // Stop processing WS messages locally but don't close the socket; keep it for resume
       // if (sess?.ws) {
@@ -1821,6 +1838,7 @@ export default function RecordPage() {
   const cleanupRecording = () => {
     const sess = (window as any).__asrSession || null;
     try {
+      stopPauseKeepAlive(sess);
       try {
         if (sess?.node?.port) {
           sess.node.port.onmessage = null;
@@ -1878,24 +1896,42 @@ export default function RecordPage() {
   };
 
   // End Session: save AI summary to DB (update existing summary if present), cleanup and navigate
-  const handleEndSession = async () => {
-    // Use stored campaign id and summary from transcript context
+  const handleEndSession = async (): Promise<void> => {
+    // 1) Politely tell the ASR server we're done and wait for its ack/drain
     try { await endStreamAndWait(); } catch {}
-    const campaignId = currentCampaignId || null;
-    const campaignTitle = (window?.localStorage?.getItem("currentCampaignTitle") || "Untitled Campaign").trim();
+
+    // 2) Resolve campaign context robustly
+    let campaignId = currentCampaignId?.trim() || null;
+    if (!campaignId) {
+      try { campaignId = (await getCampaignId()) || null; } catch {}
+    }
+    if (!campaignId) {
+      try { campaignId = window.localStorage.getItem("currentCampaignId") || null; } catch {}
+    }
+
+    const campaignTitle =
+      (window?.localStorage?.getItem("currentCampaignTitle") || "Untitled Campaign").trim();
     const summaryText = summary || "";
+    const existingSummaryId =
+      typeof window !== "undefined" ? window.localStorage.getItem("currentSummaryId") : null;
 
-    // Try to pick an existing summaryId from localStorage if set by History
-    const existingSummaryId = typeof window !== "undefined" ? window.localStorage.getItem("currentSummaryId") : null;
+    if (!campaignId) {
+      console.error("[EndSession] Missing campaignId; not saving/navigating.");
+      alert("No campaign selected. Please select a campaign first.");
+      return;
+    }
 
+    // 3) Persist transcript/summary to backend
     try {
       const payload: any = {
         text: transcript || "",
         title: campaignTitle,
         source: "live",
+        campaignId,
+        summary: summaryText,
+        useProvidedSummary: true,
+        skipCharacterExtraction: true,
       };
-      if (summaryText) payload.summary = summaryText;
-      if (campaignId) payload.campaignId = campaignId;
       if (existingSummaryId) payload.summaryId = existingSummaryId;
 
       const res = await fetch("/api/analyze", {
@@ -1903,37 +1939,42 @@ export default function RecordPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      if (!res.ok) {
-        console.error("/api/analyze returned", res.status, await res.text());
-      } else {
+
+      if (res.ok) {
         try {
           const data = await res.json();
-          // store returned summaryId so the Summary page can load the DB record
-          if (data?.summaryId && typeof window !== "undefined") {
+          if (data?.summaryId) {
             window.localStorage.setItem("currentSummaryId", data.summaryId);
           }
-        } catch (e) {
-          // ignore JSON parse errors
-        }
+        } catch {}
+      } else {
+        console.error("/api/analyze returned", res.status, await res.text());
+      }
+
+      // Fire-and-forget: upsert characters from the transcript
+      if (transcript?.trim()) {
+        fetch("/api/characters/upsert", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ campaignId, text: transcript }),
+        }).catch((e) => console.warn("[CharUpsert] error:", e));
       }
     } catch (e) {
       console.error("Failed to save transcript/summary", e);
     }
 
-    // Full cleanup and navigate to summary page
-    try {
-      cleanupRecording();
-    } catch (e) {
-      console.warn("cleanup failed", e);
-    }
+    // 4) Stop audio + WS, free resources
+    try { cleanupRecording(); } catch (e) { console.warn("cleanup failed", e); }
 
-    if (campaignId) {
-      try {
-        router.push(`/campaigns/${campaignId}/summary`);
-      } catch (e) {
-        console.error("Failed to navigate to summary page", e);
-      }
-    }
+    // 5) Reset UI state so the page is fresh next time you return
+    try {
+      setTranscript("");
+      setSummary("");
+      window.localStorage.removeItem("currentSummaryId"); // don't accidentally "update" last summary
+    } catch {}
+
+    // 6) Navigate to the session summary page
+    router.push(`/campaigns/${campaignId}/summary`);
   };
 
   // ======= Character carousel data/state (new style) ======= //
@@ -2192,9 +2233,8 @@ export default function RecordPage() {
                 />
               </div>
               <button
-                onClick={() => currentCampaignId && handleEndSession()}
+                onClick={handleEndSession}
                 className="ml-45 mt-6 font-bold text-[#3D2304] underline hover:text-[#A43718] cursor-pointer disabled:opacity-50"
-                disabled={!currentCampaignId}
                 type="button"
               >
                 End Session
