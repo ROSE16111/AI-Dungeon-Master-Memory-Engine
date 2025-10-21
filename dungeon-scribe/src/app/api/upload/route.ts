@@ -1,5 +1,6 @@
-// src/app/api/upload/route.ts
+// app/api/upload/route.ts
 import { NextRequest, NextResponse } from "next/server";
+import { analyzeText } from "@/lib/analyze"; // CHANGED: use shared logic directly
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -38,9 +39,9 @@ export async function POST(req: NextRequest) {
       name.endsWith(".m4a") ||
       name.endsWith(".aac")
     ) {
-      // 转发到 /api/transcribe
+      // 转发到 /api/transcribe (unchanged)
       const baseUrl =
-        process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
+        process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000"; // unchanged (client-visible var is OK here)
 
       const resp = await fetch(`${baseUrl}/api/transcribe`, {
         method: "POST",
@@ -65,33 +66,24 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // ========= 自动调用 /api/analyze =========
+    // ========= 自动调用 analyzeText (no HTTP fetch) =========
     if (text.trim()) {
-      const baseUrl =
-        process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
+      // REMOVED: internal fetch to /api/analyze that caused headers-timeout
+      // const analyzeRes = await fetch(`${baseUrl}/api/analyze`, { ... })
 
-      const analyzeRes = await fetch(`${baseUrl}/api/analyze`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text,
-          source: "upload",
-          title: campaignTitle,
-        }),
+      // CHANGED: direct function call avoids Undici headers timeout
+      const analyzeData = await analyzeText({
+        text,
+        source: "upload",
+        title: campaignTitle,
       });
 
-      if (!analyzeRes.ok) {
-        return NextResponse.json({ error: "analyze failed" }, { status: 500 });
-      }
-
-      const analyzeData = await analyzeRes.json();
-
-      return NextResponse.json({ ...analyzeData, text });
+      return NextResponse.json({ ...analyzeData, text }); // unchanged response shape
     }
 
     return NextResponse.json({ error: "no text extracted" }, { status: 400 });
   } catch (e: any) {
-    console.error("UPLOAD_ERROR", e);
+    console.error("UPLOAD_ERROR", e); // unchanged
     return NextResponse.json(
       { error: e?.message ?? "upload failed" },
       { status: 500 }

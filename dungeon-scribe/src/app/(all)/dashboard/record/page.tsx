@@ -785,7 +785,7 @@ function SessionsInsidePaper({
 }) {
   const { summary } = useTranscript();
 
-  const raw = summary || `(demo summary)Arrival in Town`;
+  const raw = summary || `Not content yet`;
 
   // 解析为 {title, body} 数组；后续可直接换成接口返回的数据
   type Block = { title: string; body: string };
