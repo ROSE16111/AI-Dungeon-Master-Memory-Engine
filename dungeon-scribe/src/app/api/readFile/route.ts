@@ -9,26 +9,26 @@ export const dynamic = "force-dynamic";
 
 const execFileAsync = promisify(execFile);
 
-/** ======== 1) 外部工具路径（按需修改） ======== */
-// 建议放到 .env 里，然后用 process.env 读
+/** ======== 1) External tool paths (modify as needed) ======== */
+// Recommended: store in .env and read via process.env
 const TESSERACT_PATH =
   process.env.TESSERACT_PATH || "G:\\Tesseract\\tesseract.exe";
 
-// 优先使用 Poppler 的 pdftoppm（Windows 常见安装路径示例）
+// Prefer Poppler’s pdftoppm (common Windows install path examples)
 const PDFTOPPM_CANDIDATES = [
-  process.env.PDFTOPPM_PATH, // 你自己在 .env 指定
+  process.env.PDFTOPPM_PATH, // specify in your .env if available
   "D:\\poppler\\Library\\bin\\pdftoppm.exe",
   "D:\\poppler-25.07.0\\Library\\bin\\pdftoppm.exe",
-  "pdftoppm", // 已加到 PATH
+  "pdftoppm", // already added to PATH
 ].filter(Boolean) as string[];
 
-/** ======== 2) 工具函数 ======== */
+/** ======== 2) Utility functions ======== */
 function extnameLower(p: string) {
   return path.extname(p).toLowerCase();
 }
 
 function ensureUploadsRelative(id: string) {
-  // 安全：只允许访问 public 下的 /uploads/*
+  // Safety: only allow access to /uploads/* under public
   const clean = id.replace(/^(\.\.[/\\])+/, "").replace(/^\/+/, "");
   if (!clean.startsWith("uploads/")) {
     throw new Error("Invalid path: only /uploads/* is allowed.");
@@ -36,13 +36,13 @@ function ensureUploadsRelative(id: string) {
   return clean;
 }
 
-// 运行 Tesseract（图片→文字）
+// Run Tesseract (image → text)
 async function runTesseract(
   imageAbsPath: string,
   lang = "eng"
 ): Promise<string> {
   // tesseract input outputbase -l eng --psm 3
-  // 我们用 stdout：设置输出为 txt 到 stdout（用 '-' 作为 outputbase）
+  // Use stdout: output text to stdout (use '-' as outputbase)
   const args = [imageAbsPath, "stdout", "-l", lang, "--psm", "3"];
   const { stdout } = await execFileAsync(TESSERACT_PATH, args, {
     windowsHide: true,
@@ -51,14 +51,14 @@ async function runTesseract(
   return stdout || "";
 }
 
-// 尝试找到可用的 pdftoppm
+// Try to locate a working pdftoppm
 async function resolvePdftoppm(): Promise<string | null> {
   for (const candidate of PDFTOPPM_CANDIDATES) {
     try {
       const { stdout } = await execFileAsync(candidate, ["-v"], {
         windowsHide: true,
       });
-      if (stdout != null || true) return candidate; // 能运行就认为可用
+      if (stdout != null || true) return candidate; // if runnable, consider it usable
     } catch {
       // ignore and continue
     }
@@ -66,7 +66,7 @@ async function resolvePdftoppm(): Promise<string | null> {
   return null;
 }
 
-// PDF → 多页 PNG（返回每一页的绝对路径）
+// PDF → multiple PNG pages (return absolute paths for each page)
 async function pdfToPngs(pdfAbsPath: string, dpi = 300): Promise<string[]> {
   const pdftoppm = await resolvePdftoppm();
   if (!pdftoppm)
@@ -74,7 +74,7 @@ async function pdfToPngs(pdfAbsPath: string, dpi = 300): Promise<string[]> {
       "pdftoppm (Poppler) not found. Please install Poppler and set PDFTOPPM_PATH."
     );
 
-  // 输出到临时目录（.next/server 下安全）
+  // Output to temporary directory (.next/server for safety)
   const outDir = path.join(process.cwd(), ".next", "tmp", "pdfpng");
   await fs.mkdir(outDir, { recursive: true });
   const baseName = path.basename(pdfAbsPath, path.extname(pdfAbsPath));
@@ -90,8 +90,7 @@ async function pdfToPngs(pdfAbsPath: string, dpi = 300): Promise<string[]> {
     }
   );
 
-  // pdftoppm 生成的文件名形如：outBase-1.png, outBase-2.png ...
-  // 列目录找匹配项
+  // pdftoppm output filenames like: outBase-1.png, outBase-2.png ...
   const files = await fs.readdir(path.dirname(outBase));
   const pngs = files
     .filter(
@@ -108,40 +107,19 @@ async function pdfToPngs(pdfAbsPath: string, dpi = 300): Promise<string[]> {
   return pngs;
 }
 
-// 兜底：用 pdfjs 直接抽取文字（不经 OCR）
-// async function extractPdfTextByPdfjs(pdfAbsPath: string): Promise<string> {
-//   try {
-//     const pdfjsLib = await import("pdfjs-dist");
-//     // 一些运行环境需要设置 workerSrc，这里用 node 的默认打包流程通常可省略
-//     // @ts-ignore
-//     const loadingTask = pdfjsLib.getDocument(pdfAbsPath as any);
-//     const pdf = await loadingTask.promise;
-
-//     let out = "";
-//     for (let i = 1; i <= pdf.numPages; i++) {
-//       const page = await pdf.getPage(i);
-//       const content = await page.getTextContent();
-//       const strings = content.items.map((it: any) => it.str).filter(Boolean);
-//       out += strings.join(" ") + "\n\n";
-//     }
-//     return out.trim();
-//   } catch (e) {
-//     throw new Error("pdfjs extract failed: " + (e as Error).message);
-//   }
-// }
-// 兜底：用 Poppler 的 pdftotext 直接抽文字（不需要 pdfjs / canvas）
+// Fallback: extract text directly using Poppler’s pdftotext (no OCR needed)
 const PDFTOTEXT_CANDIDATES = [
-  process.env.PDFTOTEXT_PATH, // 你可以在 .env 指定
+  process.env.PDFTOTEXT_PATH, // specify in your .env
   "D:\\poppler\\Library\\bin\\pdftotext.exe",
   "D:\\poppler-25.07.0\\Library\\bin\\pdftotext.exe",
-  "pdftotext", // 已加入 PATH
+  "pdftotext", // already added to PATH
 ].filter(Boolean) as string[];
 
 async function resolvePdftotext(): Promise<string | null> {
   for (const c of PDFTOTEXT_CANDIDATES) {
     try {
       const { stdout } = await execFileAsync(c, ["-v"], { windowsHide: true });
-      if (stdout != null || true) return c; // 能运行就认为可用
+      if (stdout != null || true) return c; // if runnable, consider it usable
     } catch {}
   }
   return null;
@@ -150,7 +128,7 @@ async function resolvePdftotext(): Promise<string | null> {
 async function extractPdfTextByPoppler(pdfAbsPath: string): Promise<string> {
   const pdftotext = await resolvePdftotext();
   if (!pdftotext) throw new Error("pdftotext not found");
-  // -layout 保持大致排版，-enc UTF-8 输出到 stdout（'-'）
+  // -layout preserves layout, -enc UTF-8 outputs to stdout ('-')
   const args = ["-layout", "-enc", "UTF-8", pdfAbsPath, "-"];
   const { stdout } = await execFileAsync(pdftotext, args, {
     windowsHide: true,
@@ -159,20 +137,20 @@ async function extractPdfTextByPoppler(pdfAbsPath: string): Promise<string> {
   return (stdout || "").toString();
 }
 
-/** ======== 3) 主处理逻辑 ======== */
+/** ======== 3) Main handler logic ======== */
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
-    const id = searchParams.get("id"); // 形如 /uploads/xxx.pdf
+    const id = searchParams.get("id"); // e.g., /uploads/xxx.pdf
     if (!id) {
       return NextResponse.json({ error: "Missing id" }, { status: 400 });
     }
 
-    // 只允许 public/uploads 下的文件
-    const safeRel = ensureUploadsRelative(id.replace(/^\/+/, "")); // 去掉开头的斜杠
+    // Only allow files under public/uploads
+    const safeRel = ensureUploadsRelative(id.replace(/^\/+/, "")); // remove leading slash
     const absPath = path.join(process.cwd(), "public", safeRel);
 
-    // 存在性校验
+    // Check file existence
     try {
       await fs.access(absPath);
     } catch {
@@ -181,21 +159,21 @@ export async function GET(req: NextRequest) {
 
     const ext = extnameLower(absPath);
 
-    // ============ A) 图片：直接 Tesseract ============
+    // ============ A) Image: direct Tesseract ============
     if (
       [".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff"].includes(ext)
     ) {
-      const text = await runTesseract(absPath, "eng"); // 如需中文可换成 "chi_sim+eng"
+      const text = await runTesseract(absPath, "eng"); // for Chinese, use "chi_sim+eng"
       return NextResponse.json({ ok: true, type: "image", text });
     }
 
-    // ============ B) Word：用 mammoth 读取 ============
+    // ============ B) Word: use mammoth ============
     if (ext === ".docx") {
       try {
-        // 👇 为了兼容类型提示，强转为 any
+        // 👇 Type hint compatibility
         const mammoth: any = await import("mammoth");
         const buf = await fs.readFile(absPath);
-        // 保留你原来写法：convertToMarkdown
+        // Keep your existing method: convertToMarkdown
         const { value } = await mammoth.convertToMarkdown({ buffer: buf });
         return NextResponse.json({ ok: true, type: "docx", text: value || "" });
       } catch (e) {
@@ -207,24 +185,24 @@ export async function GET(req: NextRequest) {
     }
 
     if (ext === ".doc") {
-      // .doc 老格式建议提示转成 docx 再读；也可集成 libreoffice 做转换
+      // .doc legacy format: suggest converting to .docx; could integrate libreoffice conversion
       return NextResponse.json(
         { error: ".doc is not supported. Please convert to .docx." },
         { status: 415 }
       );
     }
 
-    // ============ C) PDF：渲染为图片 → OCR ============
+    // ============ C) PDF: render as images → OCR ============
     if (ext === ".pdf") {
       try {
-        // 1) PDF → PNG（需要安装 Poppler 的 pdftoppm）
+        // 1) PDF → PNG (requires Poppler’s pdftoppm)
         const pages = await pdfToPngs(absPath, 300);
 
-        // 2) 逐页 OCR（串行最稳；如需提速可 Promise.all 限流）
+        // 2) Page-by-page OCR (serial for stability; can parallelize with throttling)
         let total = "";
         for (let i = 0; i < pages.length; i++) {
           const pagePath = pages[i];
-          const pageText = await runTesseract(pagePath, "eng"); // 需要中文可改 "chi_sim+eng"
+          const pageText = await runTesseract(pagePath, "eng"); // use "chi_sim+eng" for Chinese
           total +=
             `\n\n===== Page ${i + 1}/${pages.length} =====\n` + pageText.trim();
         }
@@ -236,7 +214,7 @@ export async function GET(req: NextRequest) {
           text: total.trim(),
         });
       } catch (ocrErr: any) {
-        // 兜底：尝试 pdfjs 直接抽文本（某些扫描件没有文本就会空）
+        // Fallback: try extracting text directly (some PDFs already have selectable text)
         try {
           const direct = await extractPdfTextByPoppler(absPath);
           if (direct.trim()) {
@@ -244,7 +222,7 @@ export async function GET(req: NextRequest) {
               ok: true,
               type: "pdf-text",
               text: direct,
-              note: "pdftoppm not available or OCR failed; returned direct text via pdfjs.",
+              note: "pdftoppm not available or OCR failed; returned direct text via Poppler.",
             });
           }
         } catch {
@@ -257,7 +235,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // 其它类型：直接返回不支持
+    // Other file types: unsupported
     return NextResponse.json(
       { error: `Unsupported file type: ${ext || "unknown"}` },
       { status: 415 }
