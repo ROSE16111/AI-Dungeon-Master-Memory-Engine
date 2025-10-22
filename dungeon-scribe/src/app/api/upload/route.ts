@@ -20,7 +20,7 @@ export async function POST(req: NextRequest) {
 
     let text = "";
 
-    // ========= 文本类 =========
+    // ========= Text-based files =========
     if (name.endsWith(".txt")) {
       text = buffer.toString("utf8");
     } else if (name.endsWith(".docx")) {
@@ -32,20 +32,20 @@ export async function POST(req: NextRequest) {
       const out = await pdfParse(buffer);
       text = out.text || "";
 
-      // ========= 音频类 (mp3, wav, m4a, aac) =========
+      // ========= Audio files (mp3, wav, m4a, aac) =========
     } else if (
       name.endsWith(".mp3") ||
       name.endsWith(".wav") ||
       name.endsWith(".m4a") ||
       name.endsWith(".aac")
     ) {
-      // 转发到 /api/transcribe (unchanged)
+      // Forward to /api/transcribe (unchanged)
       const baseUrl =
         process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000"; // unchanged (client-visible var is OK here)
 
       const resp = await fetch(`${baseUrl}/api/transcribe`, {
         method: "POST",
-        body: form, // 原始 FormData 直接转发
+        body: form, // original FormData directly forwarded
       });
 
       if (!resp.ok) {
@@ -58,7 +58,7 @@ export async function POST(req: NextRequest) {
       const data = await resp.json();
       text = data.text || "";
 
-      // ========= 不支持的类型 =========
+      // ========= Unsupported file type =========
     } else {
       return NextResponse.json(
         { error: "unsupported file type" },
@@ -66,7 +66,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // ========= 自动调用 analyzeText (no HTTP fetch) =========
+    // ========= Automatically call analyzeText (no HTTP fetch) =========
     if (text.trim()) {
       // REMOVED: internal fetch to /api/analyze that caused headers-timeout
       // const analyzeRes = await fetch(`${baseUrl}/api/analyze`, { ... })
