@@ -1,6 +1,6 @@
 // src/app/(all)/resources/mapview/[id]/page.tsx
-// 页面作用(Page): Map 网格 + 有限可见光视图 (grid + limited visibility light)
-// 关键词(Keywords): Dynamic Route(动态路由), params.id, Fog of War(雾层), Light Source(光源)
+// Page Purpose: Map grid + limited visibility light view (grid + light radius rendering)
+// Keywords: Dynamic Route, params.id, Fog of War, Light Source
 
 import MaskedMap from "@/components/MaskedMap";
 import { headers } from "next/headers";
@@ -9,19 +9,19 @@ import Link from "next/link";
 export const dynamic = "force-dynamic";
 
 async function getMapMeta(id: string) {
-  const h = await headers(); // headers() 拿主机名。Next15 要 await
+  const h = await headers(); // headers() to get the hostname. Next15 requires await
   const host = h.get("host") || "localhost:3000";
   const proto = process.env.VERCEL ? "https" : "http";
   const base = `${proto}://${host}`;
 
-  // ✅ 关键：把当前请求的 cookie 透传给内部 API
+  // ✅ Key: Forward the current request cookie to the internal API
   const cookie = h.get("cookie") ?? "";
 
   const res = await fetch(`${base}/api/resources/${encodeURIComponent(id)}`, {
     cache: "no-store",
     headers: {
-      cookie, // ← 传 cookie
-      // 如果你的接口还校验其他头，也在这里一并传过去：
+      cookie, // ← Pass cookie
+      // If your API validates other headers, include them here as well:
       // "user-agent": h.get("user-agent") ?? "",
       // "accept-language": h.get("accept-language") ?? "",
     },
@@ -34,7 +34,7 @@ async function getMapMeta(id: string) {
     id: item.id,
     name: item.title ?? `Map #${id}`,
     imageUrl: item.fileUrl || item.previewUrl || "/paper.png",
-    cols: item.gridCols ?? 40, // 没有字段时走默认
+    cols: item.gridCols ?? 40, // Default if field missing
     rows: item.gridRows ?? 30,
     lightI: item.lightI ?? null,
     lightJ: item.lightJ ?? null,
@@ -42,36 +42,36 @@ async function getMapMeta(id: string) {
   };
 }
 
-/** ✅ Next 15：params 是 Promise，不能同步解构
- *  旧：export default async function MapViewPage({ params: { id } }: { params: { id: string } })
- *  新：接 props，await props.params 再取 id
+/** ✅ Next 15: params is a Promise, cannot destructure synchronously
+ *  Old: export default async function MapViewPage({ params: { id } }: { params: { id: string } })
+ *  New: accept props, await props.params, then extract id
  */
 export default async function MapViewPage(
-  props: { params: Promise<{ id: string }> } // 👈 改这里：params 是 Promise
+  props: { params: Promise<{ id: string }> } // 👈 Updated: params is a Promise
 ) {
-  const { id } = await props.params;          // 👈 再改这里：await 后再用 id
+  const { id } = await props.params;          // 👈 Updated: await before using id
   const meta = await getMapMeta(id);
 
   return (
     <main className="p-4 space-y-3">
-      {/* 头部：左 Back / 中居中标题 / 右占位（保证真正居中） */}
+      {/* Header: Left Back / Center Title / Right Spacer (for true centering) */}
       <header className="mb-2">
         <div className="grid grid-cols-[auto_1fr_auto] items-center gap-3">
-          {/* 左侧 Back（去掉 absolute） */}
+          {/* Left Back button (removed absolute positioning) */}
           <Link
-            href="/resources" // 按你的资源页真实路径
+            href="/resources" // Adjust to your actual resource page path
             aria-label="Back to resources"
             className="px-3 py-2 rounded-md bg-black/60 hover:bg-black/80 text-white inline-flex items-center"
           >
             ← Back
           </Link>
 
-          {/* 中间标题：居中显示 */}
+          {/* Center title: display centered */}
           <h1 className="text-2xl font-semibold text-white text-center truncate">
             {meta.name}
           </h1>
 
-          {/* 右侧占位：让标题真正居中。宽度 ≈ Back 按钮的视觉宽度 */}
+          {/* Right spacer: ensures true centering. Width ≈ Back button visual width */}
           <div className="w-[72px]" aria-hidden />
         </div>
       </header>
@@ -82,7 +82,7 @@ export default async function MapViewPage(
           imageUrl={meta.imageUrl}
           cols={meta.cols}
           rows={meta.rows}
-          initialLight={{       // ✅ 用后端保存的光源，若没有则回退
+          initialLight={{       // ✅ Use backend-saved light source, fallback if missing
             i: typeof meta.lightI === "number" ? meta.lightI : 0,
             j: typeof meta.lightJ === "number" ? meta.lightJ : 0,
             radiusTiles:
@@ -94,9 +94,10 @@ export default async function MapViewPage(
       </div>
 
       <p className="text-sm text-white/80">
-        Use Arrow Keys / 'WASD'（按格移动光源）
+        Use Arrow Keys / 'WASD' (move light source by grid)
       </p>
-      <p className="text-sm text-white/80">Use 'h' to close/open Inspector</p>
+      <p className="text-sm text-white/80">Use 'h' to toggle Inspector</p>
     </main>
   );
 }
+
