@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import Image from "next/image";
-import { useRouter, useParams } from "next/navigation"; // back 按钮
+import { useRouter, useParams } from "next/navigation"; // back button
 
 /* Adjust parameters */
 const HEADER_H = 88;
@@ -11,7 +11,7 @@ const FILTER_H = 90;
 const SECTION_PULLUP = 32;
 const BOTTOM_GAP = 120;
 
-/* 防滚动 */
+/* Prevent scrolling */
 function useLockBodyScroll() {
   useEffect(() => {
     const prev = document.body.style.overflow;
@@ -22,7 +22,7 @@ function useLockBodyScroll() {
   }, []);
 }
 
-/*=========== Component 0: Top-right Search（受控，带命中导航） ===========*/
+/*=========== Component 0: Top-right Search (controlled, with navigation on match) ===========*/
 function SearchMapsBar({
   q,
   setQ,
@@ -47,13 +47,13 @@ function SearchMapsBar({
 
   return (
     <>
-      {/* 搜索框容器：右上角绝对定位（沿用像素坐标） */}
+      {/* // Search box container: absolutely positioned at the top-right corner (using pixel coordinates） */}
       <form
         onSubmit={onSubmit}
         className="absolute"
         style={{ left: 1096, top: 104, width: 260, height: 45, zIndex: 50 }}
       >
-        {/* 输入框 */}
+        {/* Input field*/}
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
@@ -78,7 +78,7 @@ function SearchMapsBar({
             }
           }}
         />
-        {/* 右侧放大镜按钮 */}
+        {/* Magnifying glass button on the right side */}
         <button
           type="submit"
           aria-label="Submit search"
@@ -98,7 +98,7 @@ function SearchMapsBar({
         </button>
       </form>
 
-      {/* 上/下一条命中（仅在有命中时显示） */}
+      {/* Previous/Next match buttons (visible only when matches exist)*/}
       {showPrevNext && (
         <div
           className="absolute flex items-center gap-2 text-white"
@@ -125,7 +125,7 @@ function SearchMapsBar({
   );
 }
 
-/*=========== Components 1: 顶部标题 + 视图切换 ===========*/
+/*=========== Components 1: Top Title + View Switch ===========*/
 function TitleWithFilter({
   value,
   onChange,
@@ -224,8 +224,8 @@ function MenuItem({
     </button>
   );
 }
+/* Component 2: Main Page Body (used only in Characters search) */
 
-/********  Component 2: 页面主体（仅在 Characters 使用搜索）  ***********/
 export default function SummaryPage() {
   useLockBodyScroll();
   const [view, setView] = useState<"sessions" | "character">("sessions");
@@ -270,12 +270,11 @@ export default function SummaryPage() {
     setCampaignId(id as string | undefined);
   }, [params]);
 
-  // 搜索：仅在 character 视图里生效
-  // 搜索：Character + Sessions
+  // Search: only active in the Character view
+  // Search: Character + Sessions
   const [q, setQ] = useState("");
   const [charSearchKey, setCharSearchKey] = useState("");
   const [charSearchTick, setCharSearchTick] = useState(0);
-  // —— Sessions 用：关键词、高亮命中总数、当前命中索引 ——
   const [searchTerm, setSearchTerm] = useState("");
   const [hitCount, setHitCount] = useState(0);
   const [activeHit, setActiveHit] = useState(0);
@@ -283,11 +282,11 @@ export default function SummaryPage() {
   const handleSearch = () => {
     const query = q.trim();
     if (view === "character") {
-      setCharSearchKey(query); // 角色轮播的“居中+闪光”
-      setCharSearchTick((t) => t + 1); // 每次按 Enter 递增，强制触发动画
+      setCharSearchKey(query);// Character carousel: center + highlight
+      setCharSearchTick((t) => t + 1); // Increment on each Enter to trigger animation
     } else {
-      setSearchTerm(query); // Sessions：记录关键词
-      setActiveHit(0); // 光标回到第一条命中
+      setSearchTerm(query); // Sessions: store search keyword
+      setActiveHit(0);// Reset cursor to the first match
     }
   };
 
@@ -298,7 +297,8 @@ export default function SummaryPage() {
     if (hitCount > 0) setActiveHit((i) => (i + 1) % hitCount);
   };
 
-  // Sessions：输入框 q 变化时清空上一次搜索结果（只有按下 Enter 调用 handleSearch 才重新计算命中）
+ // Sessions: clear previous search results when input 'q' changes 
+// (recalculate matches only when Enter is pressed to trigger handleSearch)
   useEffect(() => {
     if (view === "sessions") {
       if (searchTerm !== "") setSearchTerm("");
@@ -318,15 +318,13 @@ export default function SummaryPage() {
 
   return (
     <div className="fixed inset-0 overflow-hidden text-white">
-      {/* 左上角返回 */}
       <button
         onClick={() => router.back()}
         className="absolute top-26 left-6 z-50 p-2 rounded-md bg-black/60 hover:bg-black/80 transition text-white"
       >
         ← Back
       </button>
-
-      {/* 右上角搜索 */}
+      
       <SearchMapsBar
         q={q}
         setQ={setQ}
@@ -341,7 +339,7 @@ export default function SummaryPage() {
         onNext={onNext}
       />
 
-      {/* 主体 */}
+      {/* main body*/}
       <main
         className="absolute inset-x-0 bottom-0 overflow-hidden flex flex-col items-center"
         style={{ top: HEADER_H }}
@@ -360,7 +358,7 @@ export default function SummaryPage() {
           >
             <ParchmentBackground />
 
-            {/* Sessions 维持原样，不接入搜索 */}
+            {/* Sessions // Keep as-is, do not connect to search */}
             {view === "sessions" && (
               <CardOnPaper
                 campaignId={campaignId}
@@ -370,7 +368,7 @@ export default function SummaryPage() {
               />
             )}
 
-            {/* Characters：接入 searchName 实现“居中+动画” */}
+            {/* Characters：Hook up `searchName` to implement "center + animation"” */}
             {view === "character" && (
               <div
                 className="absolute z-[3]"
@@ -397,7 +395,7 @@ export default function SummaryPage() {
   );
 }
 
-/**====== Component 3: 羊皮纸背景 */
+/**====== Component 3: background */
 function ParchmentBackground() {
   return (
     <div
@@ -421,9 +419,8 @@ function ParchmentBackground() {
     </div>
   );
 }
-
-/**======= Component4: Sessions 里的白卡片（右上角加下载按钮） */
-/**======= Component4: Sessions 里的白卡片（下载 .txt：标题+日期+Summary） */
+/**======= Component 4: White card in Sessions (add a download button at the top-right) */
+/**======= Component 4: White card in Sessions (download .txt: Title + Date + Summary) */
 function CardOnPaper({
   campaignId,
   searchTerm = "",
@@ -437,13 +434,13 @@ function CardOnPaper({
 }) {
   const PAPER_TOP = "30vh";
   const PAPER_W = "60vw";
-
-  // —— 文案：标题 / 日期 / Summary（显示与下载共用同一份） ——
+// —— Text content: Title / Date / Summary (shared between display and download)
   const [title, setTitle] = useState("");
   const [date, setDate] = useState("");
-  const initialSummary = ``.trim(); // 去掉首尾空行
+  const initialSummary = ``.trim(); 
 
-  // —— 新增：编辑状态 & 文本 state ——
+// —— New: Edit mode & text stat
+
   const [editable, setEditable] = useState(false);
   const [summary, setSummary] = useState(initialSummary);
   const [summaryId, setSummaryId] = useState<string | null>(null);
@@ -541,8 +538,7 @@ function CardOnPaper({
       })
       .catch((err) => console.error("Failed to load session summary:", err));
   }, [campaignId]);
-
-  // 关键词或内容变化时：统计命中并滚到第一条
+// When keyword or content changes: count matches and scroll to the first one
   useEffect(() => {
     const vp = viewportRef.current;
     if (!vp) {
@@ -560,8 +556,7 @@ function CardOnPaper({
       }
     });
   }, [searchTerm, summary]);
-
-  // 当前命中索引变化时：滚动并高亮当前命中
+// When the current match index changes: scroll to and highlight the current match
   useEffect(() => {
     const vp = viewportRef.current;
     if (!vp) return;
@@ -585,14 +580,14 @@ function CardOnPaper({
     }
   }, [activeHit, searchTerm, summary]);
 
-  // —— 点击下载：导出为 .txt（UTF-8） ——
+  // ——download ——
   const downloadSummary = () => {
     const content = `${title}\n${date}\n\n${summary}\n`;
     const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${title.replace(/\s+/g, "_")}.txt`; // 文件名：Forest_Adventure.txt
+    a.download = `${title.replace(/\s+/g, "_")}.txt`; // file name：Forest_Adventure.txt
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -612,7 +607,7 @@ function CardOnPaper({
       }}
     >
       <div className="w-full bg-[#F5F5F5] border border-[#E9E9E9] rounded-[20px] shadow-lg relative p-6 md:p-8">
-        {/* 下载按钮（右上角） */}
+        {/* download button */}
         <button
           className="absolute top-4 right-4 p-2 rounded-md hover:bg-black/10 active:scale-95 transition cursor-pointer"
           onClick={downloadSummary}
@@ -660,14 +655,14 @@ function CardOnPaper({
           </div>
         </div>
 
-        {/* 文字总结（可编辑） */}
+        {/* txt summary(editable) */}
         <div className="mt-6">
           <div
             ref={viewportRef}
             className="relative w-full"
             style={{
               minHeight: 220,
-              maxHeight: 240, // 更紧凑；超出出现滚动条
+              maxHeight: 240, 
               background: "#f0f0f0",
               border: "2px dashed #ccc",
               borderRadius: "12px",
@@ -676,7 +671,7 @@ function CardOnPaper({
               overflowY: "auto",
             }}
           >
-            {/* 右上角编辑图标 */}
+            {/* edit icon*/}
             {!editable && (
               <button
                 className="absolute top-2 right-2 p-2 rounded-md hover:bg-black/10 transition cursor-pointer"
@@ -684,7 +679,7 @@ function CardOnPaper({
                 aria-label="Edit summary"
                 title="Edit"
               >
-                {/* 简单的✏️；你也可以换成SVG或图片 */}
+                {/* more simple */}
                 ✏️
               </button>
             )}
@@ -804,14 +799,14 @@ function CardOnPaper({
   );
 }
 
-/********* ===== Components 5: 角色轮播（3 张位，支持 N>=3 环绕；含搜索命中动画） **********/
+/********* ===== Components 5: Character Carousel (3 slots, supports N>=3 looping; includes search highlight animation) **********/
 function CharacterCarouselStacked({
   searchName = "",
   searchTick,
   campaignIdProp,
 }: {
   searchName?: string;
-  searchTick?: number; // ✅ 新增
+  searchTick?: number; // 
   campaignIdProp?: string | undefined | null;
 }) {
   const params = useParams();
@@ -823,8 +818,7 @@ function CharacterCarouselStacked({
   const [cur, setCur] = useState(0);
   const [direction, setDirection] = useState<"left" | "right">("right");
   const [flippedIndex, setFlippedIndex] = useState<number | null>(null);
-
-  // 命中提示动画（轻微缩放 + 发光框）
+// Match highlight animation (slight scaling + glowing border)
   const [hintOn, setHintOn] = useState(false);
   const fireHint = () => {
     setHintOn(true);
@@ -917,14 +911,15 @@ function CharacterCarouselStacked({
     setFlippedIndex(null);
   };
 
-  // 根据搜索词把对应角色切到中间并触发 hint 动画（全名优先，包含匹配兜底） - ALWAYS called
+// Center the matched character based on the search term and trigger the hint animation 
+// (exact name match takes priority, partial match as fallback) - ALWAYS called
+
   const lastTargetRef = useRef<number | null>(null);
-  // ✅ 命中后：切到中间 & 触发 hint；若已在中间或重复命中，也要闪一下
   useEffect(() => {
     const key = searchName.trim().toLowerCase();
     if (!key || items.length === 0) return;
 
-    // 先全名匹配，再包含匹配
+// First match by full name, then fallback to partial (substring) match
     let i = items.findIndex((x) => x.name.toLowerCase() === key);
     if (i < 0) i = items.findIndex((x) => x.name.toLowerCase().includes(key));
     if (i < 0) return;
@@ -933,18 +928,14 @@ function CharacterCarouselStacked({
     const alreadyCenter = i === cur;
 
     if (alreadyCenter) {
-      // 之前是直接 return；改为也闪一下，给用户反馈
       fireHint();
       lastTargetRef.current = i;
       return;
     }
-    if (sameTarget) {
-      // 之前是直接 return；回车“重复搜索”时也闪一下
+    if (sameTarget) 
       fireHint();
       return;
     }
-
-    // 真正切换 + 闪光
     goTo(i);
     fireHint();
     lastTargetRef.current = i;
@@ -1343,7 +1334,7 @@ function CharacterCarouselStacked({
           aria-label="Next"
           className="absolute h-[50px] w-[50px] rounded-full grid place-items-center transition hover:scale-105 active:scale-95 cursor-pointer"
           style={{
-            left: 698, // 用固定 left 值
+            left: 698, //use fixed left value
             top: 150,
             zIndex: 45,
             background: "rgba(0,0,0,0.85)",
@@ -1369,7 +1360,7 @@ function CharacterCarouselStacked({
         </button>
       )}
 
-      {/* 三张位 */}
+      {/* // Three display slots*/}
       <div className="relative" style={{ height: 438 }}>
         <Card data={items[idxL]} type="left" index={idxL} />
         <Card
@@ -1382,7 +1373,7 @@ function CharacterCarouselStacked({
         <Card data={items[idxR]} type="right" index={idxR} />
       </div>
 
-      {/* 指示点：数量 = N */}
+      {/* Indicator dots: count = N*/}
       <div
         className="absolute flex gap-2"
         style={{ left: 340, top: 388, zIndex: 40 }}
