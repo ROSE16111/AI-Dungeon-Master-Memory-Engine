@@ -1,39 +1,45 @@
 // src/components/MaskedMap.tsx
-// What: 在底层画布绘制地图，在上层画布绘制“雾层”，用 destination-out 打洞形成光路。
-// Why: Canvas 方案方便扩展多光源 / Line-of-Sight / 性能更稳。
-// Keywords: Fog of War(雾层), Light Source(光源), Grid(网格), destination-out(打洞混合), Radial Gradient(径向渐变软边)
-//Input:
-//Route param [id] for the resource (map).
-//User’s current campaign (from an httpOnly cookie currentCampaignId, read server-side).
-//Initial map attributes from DB (e.g., gridCols, gridRows, optional lightI, lightJ, lightRadius).
-//The uploaded map image (fileUrl) or a preview URL.
-// {<div style={{width:display.w, height:display.h}}>
-//   [最底层]  <canvas ref={baseRef}>         —— 底图（等比缩放后的地图像素）
-//   [中间层]  <div style={gridStyle}>         —— 网格(用CSS渐变画线，便宜又清晰)
-//   [上面层]  <canvas ref={fogRef}>          —— 雾层(整块黑 + 用“挖洞”显示光照)
-//   [悬浮层]  <Hud/>                          —— HUD 控制面板（右下角，可调节参数）
-// </div> */}
+// What: Draws the map on the base canvas and an overlaid “fog layer” on the top canvas.
+//        Uses `destination-out` blending to carve holes, forming visible light paths.
+// Why: The Canvas-based solution supports multiple light sources, Line-of-Sight,
+//      and provides better performance and flexibility.
+// Keywords: Fog of War, Light Source, Grid, destination-out (hole blending),
+//            Radial Gradient (soft edge lighting)
+//
+// Input:
+// - Route param [id] for the resource (map).
+// - User’s current campaign (from an httpOnly cookie currentCampaignId, read server-side).
+// - Initial map attributes from DB (e.g., gridCols, gridRows, optional lightI, lightJ, lightRadius).
+// - The uploaded map image (fileUrl) or a preview URL.
+//
+// Structure:
+// <div style={{width: display.w, height: display.h}}>
+//   [Bottom Layer] <canvas ref={baseRef}>   —— Map image (scaled proportionally)
+//   [Middle Layer] <div style={gridStyle}>  —— Grid (drawn via CSS gradient lines; cheap & clear)
+//   [Top Layer]    <canvas ref={fogRef}>    —— Fog layer (solid black + “holes” for light)
+//   [HUD Layer]    <Hud/>                   —— HUD control panel (bottom-right, adjustable params)
+// </div>
 "use client";
 import React, { useEffect, useRef, useState, useCallback } from "react";
 
 /* ---------------------------------- Props ---------------------------------- */
 type LightState = {
-  i: number;             // 行(Y) index
-  j: number;             // 列(X) index
-  radiusTiles: number;   // 半径（单位：格）
-  soft?: number;         // 软边比例 0~1
+  i: number;             // Row (Y) index
+  j: number;             // Column (X) index
+  radiusTiles: number;   // Radius (in tiles)
+  soft?: number;         // Soft edge ratio (0–1)
 };
 
 type Props = {
-  resourceId: string;    // ✅ 为了保存到后端，需要知道资源 id
-  imageUrl: string;      // 地图图片 URL
-  cols: number;          // 初始网格列数 (X)
-  rows: number;          // 初始网格行数 (Y)
+  resourceId: string;    // ✅ Required for saving back to the server
+  imageUrl: string;      // Map image URL
+  cols: number;          // Initial number of grid columns (X)
+  rows: number;          // Initial number of grid rows (Y)
   initialLight?: LightState;
   fogOpacity?: number;
 };
 
-/* ------------------------------- 组件实现 ---------------------------------- */
+/* ------------------------------- Component Implementation ---------------------------------- */
 export default function MaskedMap({
   resourceId,
   imageUrl,
@@ -42,15 +48,15 @@ export default function MaskedMap({
   initialLight = { i: 0, j: 0, radiusTiles: 3, soft: 0.5 },
   fogOpacity = 0.95,
 }: Props) {
-  // 1) 两张 Canvas：底图(base) + 雾层(fog)
+  // 1) Two canvases: base (map) + fog (overlay)
   const baseRef = useRef<HTMLCanvasElement>(null);
   const fogRef = useRef<HTMLCanvasElement>(null);
 
-  // 2) 地图图片与原始尺寸（natural size）
+  // 2) Map image and its natural dimensions
   const [img, setImg] = useState<HTMLImageElement | null>(null);
   const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
 
-  // 3) 本地可编辑状态（把 props 复制为受控状态）
+  // 3) Local editable state (copy props to controlled state)
   const [gridX, setGridX] = useState<number>(Math.max(1, cols));
   const [gridY, setGridY] = useState<number>(Math.max(1, rows));
   const [light, setLight] = useState<LightState>({
@@ -61,21 +67,22 @@ export default function MaskedMap({
   });
 
   // HUD state
-  const [hudOpen, setHudOpen] = useState(true);   // 是否展开
-  const [hudAlpha, setHudAlpha] = useState(0.5);  // 背景不透明度 0.2 ~ 0.9
+  const [hudOpen, setHudOpen] = useState(true);   // Whether the HUD is expanded
+  const [hudAlpha, setHudAlpha] = useState(0.5);  // HUD background opacity (0.2–0.9)
 
-  // 保存状态（用于显示 Saving… / Saved ✓）
+  // Save state (for displaying "Saving…" / "Saved ✓")
   const [saving, setSaving] = useState(false);
-  const [savedAt, setSavedAt] = useState<number | null>(null); // 用于显示“Saved ✓”
+  const [savedAt, setSavedAt] = useState<number | null>(null); // Used to show “Saved ✓” feedback
 
-  // ✅ 外层容器，用来测量可用宽度（等比缩放依据）
+  // ✅ Outer container, used to measure available width (basis for proportional scaling)
   const outerRef = useRef<HTMLDivElement | null>(null);
   const [containerW, setContainerW] = useState<number>(0);
 
-  // ✅ 监听容器宽度变化（等比缩放的依据）
+  // ✅ Listen to container width changes (basis for proportional scaling)
   useEffect(() => {
     const el = outerRef.current;
     if (!el) return;
+
 
     const ro = new ResizeObserver((entries) => {
       for (const e of entries) {
@@ -84,13 +91,12 @@ export default function MaskedMap({
     });
 
     ro.observe(el);
-    // 立即取一次
     setContainerW(el.clientWidth);
 
     return () => ro.disconnect();
   }, []);
 
-  // ✅ 计算显示尺寸：按容器最大宽度等比缩放（不放大）
+  // ✅ Compute display size: scale proportionally to fit container width (no upscaling)
   const display = React.useMemo(() => {
     if (!dims) return { w: 0, h: 0, scale: 1 };
     const maxW = containerW > 0 ? containerW : dims.w;
@@ -100,8 +106,10 @@ export default function MaskedMap({
     return { w, h, scale };
   }, [dims, containerW]);
 
-  // 防抖定时器（减少 PATCH 次数）
-  // 在三类地方会调用 PATCH: 键盘移动光源; HUD 改半径; HUD 改网格
+  // Debounce timer (to reduce PATCH request frequency)
+  // PATCH is triggered in three cases: moving light via keyboard; 
+  // adjusting light radius via HUD; changing grid size via HUD
+
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const debounce = (fn: () => void, wait = 400) => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -111,7 +119,7 @@ export default function MaskedMap({
   const clamp = (v: number, min: number, max: number) =>
     Math.max(min, Math.min(max, v));
 
-  /* -------------------------- 后端保存封装（统一显示状态） -------------------------- */
+  /* -------------------------- Backend save wrapper (unified status handling) -------------------------- */
   async function patchResource(patch: Record<string, number>) {
     try {
       setSaving(true);
@@ -125,7 +133,7 @@ export default function MaskedMap({
         console.error("PATCH failed", await res.text());
         return false;
       }
-      setSavedAt(Date.now()); // 用于显示“Saved ✓”
+      setSavedAt(Date.now()); // Used to display “Saved ✓”
       return true;
     } catch (e) {
       console.error("PATCH error", e);
@@ -135,39 +143,39 @@ export default function MaskedMap({
     }
   }
 
-  // “Saved ✓” 2 秒后淡出
+  // “Saved ✓” fades out after 2 seconds
   useEffect(() => {
     if (!savedAt) return;
     const t = setTimeout(() => setSavedAt(null), 2000);
     return () => clearTimeout(t);
   }, [savedAt]);
 
-  /* -------------------------- 加载图片（Load Image） -------------------------- */
+  /* -------------------------- Load image -------------------------- */
   useEffect(() => {
     const im = new Image();
-    im.crossOrigin = "anonymous"; // 如果跨域/CDN，建议设置
+    im.crossOrigin = "anonymous"; // Recommended if loading from CDN or cross-origin
     im.onload = () => {
       setImg(im);
-      setDims({ w: im.naturalWidth, h: im.naturalHeight }); // 用原图像素绘制更清晰
+      setDims({ w: im.naturalWidth, h: im.naturalHeight }); // Use original pixels for better clarity
     };
     im.src = imageUrl;
   }, [imageUrl]);
 
-  /* ------------------------- 绘制底图（Draw Base） -------------------------- */
+  /* ------------------------- Draw base map -------------------------- */
   const drawBase = useCallback(() => {
     if (!img || !dims || !baseRef.current) return;
     const c = baseRef.current;
-    c.width = display.w;   // ✅ 用显示尺寸
+    c.width = display.w;   // ✅ Use scaled display dimensions
     c.height = display.h;
 
     const g = c.getContext("2d")!;
     g.clearRect(0, 0, c.width, c.height);
-    // 将原图缩放绘制到显示尺寸
+    // Draw original image scaled to display size
     g.imageSmoothingEnabled = true;
     g.drawImage(img, 0, 0, c.width, c.height);
   }, [img, dims, display.w, display.h]);
 
-  /* --------------- 绘制雾层 + 光洞（Draw Fog + Punch Holes） --------------- */
+  /* --------------- Draw fog layer + punch light holes --------------- */
   const drawFog = useCallback(() => {
     if (!dims || !fogRef.current) return;
     const c = fogRef.current;
@@ -178,32 +186,32 @@ export default function MaskedMap({
     c.height = h;
 
     const g = c.getContext("2d")!;
-    // 1) 盖一层黑雾（黑色+可配置透明度）
+    // 1) Cover with black fog (black + configurable opacity)
     g.clearRect(0, 0, c.width, c.height);
-    g.globalCompositeOperation = "source-over"; // 正常绘制
-    // 一旦改了 c.width/height，上下文会被重置，所有状态需重新设定
+    g.globalCompositeOperation = "source-over"; // Normal drawing mode
+    // Reset after resizing canvas (resets context state)
     g.clearRect(0, 0, w, h);
     g.fillStyle = `rgba(0,0,0,${fogOpacity})`;
-    g.fillRect(-2, -2, w + 4, h + 4); // ← 出血，避免边缘缝隙
+    g.fillRect(-2, -2, w + 4, h + 4); // Bleed edges to avoid visible seams
 
-    // 2) 网格(px)计算 —— 注意这里用可编辑的 gridX/gridY
+    // 2) Grid (px) calculation — use editable gridX/gridY
     const cellW = c.width / gridX;
     const cellH = c.height / gridY;
-    const cx = (light.j + 0.5) * cellW; // 列 X（j）
-    const cy = (light.i + 0.5) * cellH; // 行 Y（i）
+    const cx = (light.j + 0.5) * cellW; // Column (X)
+    const cy = (light.i + 0.5) * cellH; // Row (Y)
     const r  = light.radiusTiles * Math.min(cellW, cellH);
     const soft = (light.soft ?? 0.5) * r;
 
-    // 3) 用 destination-out 把雾层“挖洞”（底图才能透出来）
+    // 3) Use destination-out to punch holes in fog (reveal base layer)
     g.globalCompositeOperation = "destination-out";
 
-    // 3.1 内圈硬边
+    // 3.1 Hard inner circle
     g.beginPath();
     g.arc(cx, cy, Math.max(0, r - soft), 0, Math.PI * 2);
-    g.fillStyle = "rgba(0,0,0,1)"; // 颜色不重要，dest-out 只看 alpha
+    g.fillStyle = "rgba(0,0,0,1)"; // Color irrelevant — only alpha matters
     g.fill();
 
-    // 3.2 外圈软边（径向渐变）
+    // 3.2 Soft outer edge (radial gradient)
     const grad = g.createRadialGradient(cx, cy, Math.max(0, r - soft), cx, cy, r);
     grad.addColorStop(0, "rgba(0,0,0,1)");
     grad.addColorStop(1, "rgba(0,0,0,0)");
@@ -213,24 +221,24 @@ export default function MaskedMap({
     g.fill();
   }, [dims, gridX, gridY, light, fogOpacity, display.w, display.h]);
 
-  // 初次与依赖变化时重绘
+  // Redraw on first mount and dependency changes
   useEffect(() => {
     drawBase();
     drawFog();
   }, [drawBase, drawFog]);
 
-  // 光源/参数变化时，仅需重绘雾层
+  // Redraw fog layer only when light/params change
   useEffect(() => {
     drawFog();
   }, [light, fogOpacity, gridX, gridY, drawFog]);
 
-  /* ------------------------- 键盘移动（一格步进） -------------------------- */
+  /* ------------------------- Keyboard movement (step by one cell) -------------------------- */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       let di = 0, dj = 0;
-      if (e.key === "ArrowLeft" || e.key.toLowerCase() === "a") dj = -1;  // 列 X
+      if (e.key === "ArrowLeft" || e.key.toLowerCase() === "a") dj = -1;  // Column X
       if (e.key === "ArrowRight" || e.key.toLowerCase() === "d") dj = 1;
-      if (e.key === "ArrowUp" || e.key.toLowerCase() === "w") di = -1;    // 行 Y
+      if (e.key === "ArrowUp" || e.key.toLowerCase() === "w") di = -1;    // Row Y
       if (e.key === "ArrowDown" || e.key.toLowerCase() === "s") di = 1;
       if (e.key === "h" || e.key === "H") {
         e.preventDefault();
@@ -245,9 +253,10 @@ export default function MaskedMap({
             i: clamp(L.i + di, 0, gridY - 1),
             j: clamp(L.j + dj, 0, gridX - 1),
           };
-          // 所有会改变配置的交互（移动光源、改半径、改网格）都通过一个 防抖函数 触发 PATCH
+          // All state-changing interactions (move light, change radius, change grid)
+          // are throttled via debounce() before triggering PATCH
           debounce(() => {
-            patchResource({ lightI: next.i, lightJ: next.j }); // ✅ 统一封装
+            patchResource({ lightI: next.i, lightJ: next.j }); // ✅ unified handler
           });
           return next;
         });
@@ -255,9 +264,8 @@ export default function MaskedMap({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [gridX, gridY]); // resourceId 不变可不加
-
-  /* ----------------------------- 网格可视层 ------------------------------ */
+  }, [gridX, gridY]); // resourceId is constant, no need to include
+  /* ----------------------------- Grid visual layer ------------------------------ */
   const gridStyle: React.CSSProperties = display.w
     ? {
         backgroundImage:
@@ -267,12 +275,12 @@ export default function MaskedMap({
       }
     : {};
 
-  /* ------------------------------ HUD 控制面板 ------------------------------ */
+  /* ------------------------------ HUD control panel ------------------------------ */
   const Hud = () => (
     <>
-      {/* HUD 外壳：不拦截事件 */}
+      {/* HUD wrapper: non-blocking to pointer events */}
       <div className="absolute bottom-3 right-3 z-[30] pointer-events-none select-none">
-        {/* 折叠按钮（小圆点），不挡其他区域 */}
+        {/* Collapse button (small dot), doesn’t block other UI */}
         {!hudOpen && (
           <button
             onClick={() => setHudOpen(true)}
@@ -285,19 +293,19 @@ export default function MaskedMap({
         )}
 
         {hudOpen && (
-          // 只有内容区域接收事件，其余地方透传
+          // Only the panel area accepts events, others are pass-through
           <div
             className="pointer-events-auto w-[320px] rounded-xl shadow-lg border backdrop-blur"
             style={{
-              backgroundColor: `rgba(20, 22, 26, ${hudAlpha})`, // 深灰而不是纯黑
+              backgroundColor: `rgba(20, 22, 26, ${hudAlpha})`, // dark gray, not pure black
               borderColor: "rgba(255,255,255,0.18)",
             }}
           >
-            {/* 顶部栏：标题 + 折叠 + 透明度 + 保存状态 */}
+            {/* Top bar: title + collapse + opacity + save status */}
             <div className="flex items-center justify-between px-3 pt-2 pb-1 text-white relative">
-              <div className="text-sm/5 opacity-90">Inspector / 控制台</div>
+              <div className="text-sm/5 opacity-90">Inspector / Console</div>
 
-              {/* 保存状态角标 */}
+              {/* Save status badge */}
               <div className="absolute right-[56px] top-2 text-xs" aria-live="polite">
                 {saving ? (
                   <span className="px-2 py-0.5 rounded bg-white/10 border border-white/20">
@@ -314,7 +322,7 @@ export default function MaskedMap({
               </div>
 
               <div className="flex items-center gap-2">
-                {/* 透明度滑块 */}
+                {/* Opacity slider */}
                 <input
                   type="range"
                   min={0.2}
@@ -325,7 +333,7 @@ export default function MaskedMap({
                   className="accent-white w-24"
                   title="Panel Opacity"
                 />
-                {/* 折叠按钮 */}
+                {/* Collapse button */}
                 <button
                   onClick={() => setHudOpen(false)}
                   className="h-7 w-7 rounded-md bg-white/10 hover:bg-white/20 text-white"
@@ -337,7 +345,7 @@ export default function MaskedMap({
               </div>
             </div>
 
-            {/* 主体内容 */}
+            {/* Main body */}
             <div className="px-3 pb-3 text-white space-y-2">
               {/* current (x,y) */}
               <div className="flex items-center gap-2">
@@ -439,31 +447,31 @@ export default function MaskedMap({
       </div>
     </>
   );
-
-  /* ---------------------------------- 渲染 ---------------------------------- */
+  /* ---------------------------------- Render ---------------------------------- */
   return (
-    <div ref={outerRef} className="relative w-full h-full overflow-auto">   {/* ✅ 监听这个宽度 */}
-        {/* ✅ 显示尺寸 */}
+    <div ref={outerRef} className="relative w-full h-full overflow-auto">   {/* ✅ Observe this container width */}
+      {/* ✅ Displayed dimensions */}
       <div
         className="relative inline-block"
-        style={{ width: display.w, height: display.h }}                   
+        style={{ width: display.w, height: display.h }}
       >
-        {/* 底图画布 */}
+        {/* Base canvas */}
         <canvas ref={baseRef} style={{ display: "block" }} />
 
-        {/* 网格 Overlay */}
+        {/* Grid overlay */}
         <div className="pointer-events-none absolute inset-0" style={gridStyle} />
 
-        {/* 雾层画布 */}
+        {/* Fog canvas */}
         <canvas
           ref={fogRef}
           className="absolute inset-0"
-          style={{ zIndex: 20 }}   // 盖在网格上面
+          style={{ zIndex: 20 }}   // Layer above the grid
         />
 
-        {/* 右下角 HUD（保留你之前的） */}
+        {/* Bottom-right HUD (keep previous implementation) */}
         <Hud />
       </div>
     </div>
   );
 }
+
