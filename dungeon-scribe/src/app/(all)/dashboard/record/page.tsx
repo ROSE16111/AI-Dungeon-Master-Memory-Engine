@@ -26,7 +26,7 @@ function useLockBodyScroll() {
 }
 
 // search and map
-// search and map —— 受控版：由父组件传入 q / setQ / onSearch
+// search and map —— q / setQ / onSearch
 // Search + Map + (Prev/Next for Sessions) — controlled by parent
 function SearchMapsBar({
   q,
@@ -64,9 +64,9 @@ function SearchMapsBar({
           onChange={(e) => {
             const newVal = e.target.value;
             setQ(newVal);
-            // 一旦输入变化，就清空之前的 session 搜索结果
+            // Clear previous session search results as soon as the input changes
             if (showPrevNext) {
-              // 父组件是 RecordPage，可以通过 onSearchClear 回调清空状态
+              //Parent component: RecordPage — can reset state via the onSearchClear callback
               if (typeof (window as any).onSearchClear === "function") {
                 (window as any).onSearchClear();
               }
@@ -475,7 +475,7 @@ const CharacterCarouselStacked = forwardRef(function CharacterCarouselStacked(
             exit="exit"
             variants={slideVariants}
           >
-            {/* 可选发光边框，不影响点击 */}
+            {/*Optional glowing border, does not affect click interactions */}
             {hintOn && (
               <motion.div
                 className="pointer-events-none absolute -inset-3 rounded-[26px]"
@@ -783,8 +783,9 @@ const CharacterCarouselStacked = forwardRef(function CharacterCarouselStacked(
     </div>
   );
 });
-
-/* 仅 Sessions 视图使用：羊皮纸“内部”的滚动内容（字幕从纸内出现而不是从网页底部出现）可连接LLM接口*/
+/* Used only in Sessions view: scrollable content inside the parchment 
+   (subtitles appear within the parchment instead of from the bottom of the page); 
+   can be connected to the LLM interface */
 function SessionsInsidePaper({
   searchTerm,
   activeHit,
@@ -798,7 +799,7 @@ function SessionsInsidePaper({
 
   const raw = summary || `Not content yet`;
 
-  // 解析为 {title, body} 数组；后续可直接换成接口返回的数据
+// Parse into an array of {title, body}; can later be replaced with data from an API response
   type Block = { title: string; body: string };
   const blocks: Block[] = raw
     .trim()
@@ -816,9 +817,8 @@ function SessionsInsidePaper({
   hitRefs.current = []; // rebuild on each render
 
   const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-  // 根据 activeHit 定位到对应命中（滚动到视窗中央）
-  // 当搜索词变化后：下一帧统计并滚到第一个命中
+// Scroll to the corresponding match based on activeHit (center it in the viewport)
+// After the search term changes: on the next frame, count matches and scroll to the first one
   useEffect(() => {
     const vp = viewportRef.current;
     if (!vp) {
@@ -836,8 +836,7 @@ function SessionsInsidePaper({
       }
     });
   }, [searchTerm]);
-
-  // 当 activeHit 或 searchTerm 变化：切换“当前命中”样式并滚动定位
+// When activeHit or searchTerm changes: update the "current match" style and scroll into view
   useEffect(() => {
     const vp = viewportRef.current;
     if (!vp) return;
@@ -860,9 +859,8 @@ function SessionsInsidePaper({
       });
     }
   }, [activeHit, searchTerm]);
-
-  // 渲染时把命中包一层 <mark>
-  // 替换 renderHighlighted，给每个命中标 <mark className="search-hit" data-hit={序号}>
+// Wrap each match with a <mark> tag during rendering
+// Replace renderHighlighted: mark each match as <mark className="search-hit" data-hit={index}>
   function renderHighlighted(text: string) {
     if (!searchTerm?.trim()) return text;
     const re = new RegExp(escapeRegExp(searchTerm), "gi");
@@ -893,8 +891,8 @@ function SessionsInsidePaper({
     if (last < text.length) nodes.push(text.slice(last));
     return nodes;
   }
-
-  // 纸内“安全区”：在原始可视区域基础上四周内缩，避免文字或滚动条压到破边
+// "Safe zone" inside the parchment: inset margins from the original visible area 
+// to prevent text or scrollbars from touching the torn edges
   const SAFE = { left: 22, right: 22, top: 1, bottom: 25 };
   const contentBox = {
     left: 67.86 + SAFE.left,
@@ -902,8 +900,8 @@ function SessionsInsidePaper({
     width: 867 - SAFE.left - SAFE.right,
     height: 540 - SAFE.top - SAFE.bottom,
   };
+// Custom scrollbar (track + draggable thumb)
 
-  // 自定义滚动条（轨道 + 拖拽的滑块）
   const viewportRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
   const [thumbTop, setThumbTop] = useState(0);
@@ -912,8 +910,8 @@ function SessionsInsidePaper({
   const dragOffsetRef = useRef(0);
   const sizesRef = useRef({ trackH: 1, maxThumbTop: 1, maxScrollTop: 1 });
   const SCROLLBAR = { width: 12, gap: 10 };
+// —— Recalculate size and position (triggered on content change, window resize, or scroll) ——
 
-  // —— 尺寸与位置重算（内容变化/窗口变化/滚动时触发） —— //
   const recalc = () => {
     const vp = viewportRef.current,
       track = trackRef.current;
@@ -921,7 +919,7 @@ function SessionsInsidePaper({
     const contentH = vp.scrollHeight,
       viewH = vp.clientHeight,
       trackH = track.clientHeight;
-    const minThumb = 30; // 最小拇指高度，避免太短
+    const minThumb = 30; // minim height
     const tH = Math.max(minThumb, (viewH / Math.max(contentH, 1)) * trackH);
     const maxThumbTop = Math.max(trackH - tH, 0);
     const maxScrollTop = Math.max(contentH - viewH, 1);
@@ -935,7 +933,7 @@ function SessionsInsidePaper({
     const vp = viewportRef.current;
     if (!vp) return;
     const { maxThumbTop, maxScrollTop } = sizesRef.current;
-    const t = (vp.scrollTop / maxScrollTop) * maxThumbTop; // 拇指随内容滚动
+    const t = (vp.scrollTop / maxScrollTop) * maxThumbTop; 
     setThumbTop(Number.isFinite(t) ? t : 0);
   };
 
@@ -946,18 +944,20 @@ function SessionsInsidePaper({
     const rect = track.getBoundingClientRect();
     const y = e.clientY - rect.top;
     const { maxThumbTop, maxScrollTop } = sizesRef.current;
-    const target = Math.min(Math.max(y - thumbH / 2, 0), maxThumbTop); // 点击轨道跳转
+    const target = Math.min(Math.max(y - thumbH / 2, 0), maxThumbTop);
     vp.scrollTop = (target / Math.max(1, maxThumbTop)) * maxScrollTop;
   };
 
   const onThumbMouseDown: React.MouseEventHandler<HTMLDivElement> = (e) => {
     e.preventDefault();
     const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
-    dragOffsetRef.current = e.clientY - rect.top; // 记录按下位置与拇指顶部的偏移
+    dragOffsetRef.current = e.clientY - rect.top; // Record the click position and the offset from the thumb's top
+
     setDragging(true);
   };
 
-  // —— 处理拇指拖拽 —— //
+// —— Handle thumb dragging ——
+
   useEffect(() => {
     if (!dragging) return;
     const onMove = (e: MouseEvent) => {
@@ -970,7 +970,7 @@ function SessionsInsidePaper({
       const clamped = Math.min(Math.max(y, 0), maxThumbTop);
       setThumbTop(clamped);
       const ratio = clamped / Math.max(1, maxThumbTop);
-      vp.scrollTop = ratio * maxScrollTop; // 反向驱动内容滚动
+      vp.scrollTop = ratio * maxScrollTop; // Drive content scrolling in the reverse direction
     };
     const onUp = () => setDragging(false);
     window.addEventListener("mousemove", onMove);
@@ -980,8 +980,7 @@ function SessionsInsidePaper({
       window.removeEventListener("mouseup", onUp);
     };
   }, [dragging]);
-
-  // —— 初始化与监听：尺寸变化 / 视口变化时重算拇指 —— //
+// —— Initialization & listeners: recalculate thumb on size or viewport changes ——
   useEffect(() => {
     recalc();
     const ro = new ResizeObserver(recalc);
@@ -1001,7 +1000,7 @@ function SessionsInsidePaper({
         className="absolute"
         style={{ ...contentBox, zIndex: 2, pointerEvents: "auto" }}
       >
-        {/* 真正滚动区：隐藏系统滚动条；PageDown/空格只在纸内生效 */}
+        {/* // Actual scroll area: hide system scrollbar; PageDown/Space keys only take effect within the parchment*/}
         <div
           id="sessionViewport"
           ref={viewportRef}
@@ -1010,23 +1009,24 @@ function SessionsInsidePaper({
           style={{
             inset: 0,
             padding: "6px 8px 36px 12px",
-            paddingRight: SCROLLBAR.width + SCROLLBAR.gap + 8, // 给自定义滚动条让位
+            paddingRight: SCROLLBAR.width + SCROLLBAR.gap + 8, // Leave space for the custom scrollbar
             fontFamily: '"Inter", sans-serif',
             fontWeight: 700,
             fontSize: 20,
             lineHeight: "40px",
             color: "#000",
             WebkitOverflowScrolling: "touch",
-            overscrollBehavior: "contain", // 阻止滚动传导到整个页面
+            overscrollBehavior: "contain", // Prevent scroll propagation to the entire page
             scrollbarWidth: "none",
-            msOverflowStyle: "none", // 隐藏系统滚动条（Firefox/旧 Edge）
-            touchAction: "pan-y", // 限制触控手势为纵向
+            msOverflowStyle: "none", // Hide system scrollbar (Firefox / legacy Edge)
+            touchAction: "pan-y", // Restrict touch gestures to vertical scrolling
           }}
+
           tabIndex={0}
           onKeyDown={(e) => {
             const vp = viewportRef.current;
             if (!vp) return;
-            const page = vp.clientHeight - 40; // “一页”的步长（保留 40px 重叠）
+            const page = vp.clientHeight - 40; // // "One page" scroll step (with a 40px overlap)
             if (["PageDown", "PageUp", " "].includes(e.key)) e.preventDefault();
             if (e.key === "PageDown" || e.key === " ")
               vp.scrollBy({ top: page, behavior: "smooth" });
@@ -1034,7 +1034,7 @@ function SessionsInsidePaper({
               vp.scrollBy({ top: -page, behavior: "smooth" });
           }}
         >
-          {/* 顶/底渐隐，营造“从纸里冒出”的视觉 */}
+          {/*// Top and bottom fade effects to create a “rising from the parchment” visual */}
           <div
             style={{
               WebkitMaskImage:
@@ -1068,7 +1068,7 @@ function SessionsInsidePaper({
           </div>
         </div>
 
-        {/* 自定义滚动条（完全在安全区内，受纸外层 overflow:hidden 裁剪） */}
+        {/* // Custom scrollbar (fully within the safe zone, clipped by the parchment's outer overflow:hidden) */}
         <div
           ref={trackRef}
           onMouseDown={(e) => {
@@ -1105,7 +1105,7 @@ function SessionsInsidePaper({
         </div>
       </div>
 
-      {/* 彻底隐藏 WebKit 的系统滚动条，避免“纸外出现滚条”的错觉 */}
+      {/* // Completely hide WebKit system scrollbars to avoid the illusion of scrollbars appearing outside the parchment */}
       <style jsx>{`
         #sessionViewport::-webkit-scrollbar {
           width: 0;
@@ -1347,16 +1347,16 @@ export default function RecordPage() {
 
   const router = useRouter();
 
-  // 先声明 view（避免“使用前声明”错误）
+  // Declare view first (avoid "used before declaration" error)
   const [view, setView] = useState<"sessions" | "character">("sessions");
 
-  // 统一搜索 state（只保留这一份）
+  // Unified search state (only keep this one)
   const [q, setQ] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [hitCount, setHitCount] = useState(0);
   const [activeHit, setActiveHit] = useState(0);
 
-  // 一旦输入框内容变化，清空之前的搜索结果
+  // Clear previous search results as soon as the input changes
   useEffect(() => {
     (window as any).onSearchClear = () => {
       setSearchTerm("");
@@ -1368,28 +1368,27 @@ export default function RecordPage() {
     };
   }, []);
 
-  // 切换视图时清空搜索与命中导航（保持与截图一致）
+  // Clear search and hit navigation when switching views (keep consistent with screenshot)
   const onChangeView = (v: "sessions" | "character") => {
     setView(v);
-    // 清空 Sessions 搜索相关
+    // Clear Sessions search-related states
     setQ("");
     setSearchTerm("");
     setHitCount(0);
     setActiveHit(0);
-    // 清空 Character 关键字
+    // Clear Character keyword
     setCharSearchKey("");
   };
 
-  // 搜索提交 + 上/下一条
-  // 搜索提交 + 上/下一条
+  // Search submission + previous/next match
   const onSearch = () => {
     const key = q.trim();
     if (view === "sessions") {
       setSearchTerm(key);
       setActiveHit(0);
     } else {
-      setCharSearchKey(key); // character 视图用这个
-      setCharSearchTick((t) => t + 1); // 只有按下 Enter 提交时才触发动画
+      setCharSearchKey(key); // Character view uses this
+      setCharSearchTick((t) => t + 1); // Trigger animation only when Enter is pressed
     }
   };
 
@@ -1416,7 +1415,7 @@ export default function RecordPage() {
   const sizesRef = useRef({ trackH: 1, maxThumbTop: 1, maxScrollTop: 1 });
   const SCROLLBAR = { width: 12, gap: 10 };
 
-  // —— 尺寸与位置重算（内容变化/窗口变化/滚动时触发） —— //
+ // —— Recalculate size and position (triggered on content change, window resize, or scroll) ——
   const recalc = () => {
     const vp = viewportRef.current,
       track = trackRef.current;
@@ -1525,7 +1524,7 @@ export default function RecordPage() {
 
     ws.onmessage = (ev) => {
       try {
-        // 1) 统一拿字符串
+        // 1) Always extract as string
         const raw =
           typeof ev.data === "string"
             ? ev.data
@@ -1533,14 +1532,14 @@ export default function RecordPage() {
             ? new TextDecoder().decode(ev.data)
             : String(ev.data);
 
-        // 2) 可能一帧多条、可能带日志前缀；逐行解析
+        // 2) A frame may contain multiple messages or log prefixes; parse line by line
         const lines = raw
           .split(/\r?\n/)
           .map((s) => s.trim())
           .filter(Boolean);
 
         for (const line of lines) {
-          // 截取最后一个花括号 payload（去掉类似 "[WS] actually sent -> " 的前缀）
+          // Extract the last JSON payload (remove prefixes like "[WS] actually sent -> ")
           const m = line.match(/\{.*\}$/);
           const candidate = m ? m[0] : line;
 
@@ -1552,8 +1551,8 @@ export default function RecordPage() {
             continue;
           }
 
-          // 3) —— 归一化开始 —— //
-          // 3.1 键名去空格（防止 "summary_item " 这种）
+          // 3) —— Begin normalization —— //
+          // 3.1 Trim key names (prevent cases like "summary_item ")
           if (data && typeof data === "object" && !Array.isArray(data)) {
             for (const k of Object.keys(data)) {
               const nk = k.trim();
@@ -1564,7 +1563,7 @@ export default function RecordPage() {
             }
           }
 
-          // 3.2 如果是 {"": {...}}，提出来
+          // 3.2 If structure is {"": {...}}, unwrap it
           if (
             data &&
             typeof data === "object" &&
@@ -1574,7 +1573,7 @@ export default function RecordPage() {
             data = data[""];
           }
 
-          // 3.3 常见包装 {"data": {...}}
+          // 3.3 Common wrapper {"data": {...}}
           if (
             data &&
             typeof data === "object" &&
@@ -1584,7 +1583,7 @@ export default function RecordPage() {
             data = data.data;
           }
 
-          // 3.4 如果 value 又是 JSON 字符串（二次 JSON），再解一次
+          // 3.4 If a value itself is a JSON string (double-encoded), parse again
           for (const k of ["summary_item", "summary", "final", "partial"]) {
             if (
               typeof data?.[k] === "string" &&
@@ -1595,7 +1594,7 @@ export default function RecordPage() {
               } catch {}
             }
           }
-          // —— 归一化结束 —— //
+          // —— End normalization —— //
 
           console.log("[ASR] WS message (normalized):", data);
 
@@ -1607,12 +1606,12 @@ export default function RecordPage() {
             setTranscript((prev) => (prev ? prev + "\n" : "") + data.final);
           }
 
-          // 5) 兼容旧字段 summary
+          // 5) summary
           if (typeof data.summary === "string" && data.summary.trim()) {
             setSummary(data.summary.trim());
           }
 
-          // 6) 新字段 summary_item（标题 + 正文）
+          // 6)summary_item
           const si = data.summary_item;
           if (si && typeof si === "object" && typeof si.text === "string") {
             const t = (si.title || "Update").trim?.() ?? "Update";
