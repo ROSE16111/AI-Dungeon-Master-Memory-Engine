@@ -69,11 +69,11 @@ model Resource {
   campaignId String
   campaign   Campaign          @relation(fields: [campaignId], references: [id])
 
-  gridCols  Int?   // mapview地图横向网格数（X）
-  gridRows  Int?   // mapview地图纵向网格数（Y）
-  lightI     Int?             // 新增：当前光源 Y（行 i）
-  lightJ     Int?             // 新增：当前光源 X（列 j）
-  lightRadius Int?            // 新增：当前光源半径（单位：格）
+  gridCols  Int?   // Number of horizontal grid cells (X) in the map view
+  gridRows  Int?   // Number of vertical grid cells (Y) in the map view
+  lightI     Int?             // Current light source Y position (row index i)）
+  lightJ     Int?             // Current light source X position (column index j)
+  lightRadius Int?            // Current light source radius (in grid units)
 }
 
 
