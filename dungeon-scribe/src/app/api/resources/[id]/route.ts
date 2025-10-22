@@ -8,20 +8,20 @@ import { unlink } from "fs/promises";
 export const runtime = "nodejs";
 const prisma = new PrismaClient();
 
-/** 从 cookie 里取当前战役 ID（没有就返回 null） */
+/** Get current campaign ID from cookie (return null if missing) */
 async function getCurrentCampaignId(): Promise<string | null> {
   const jar = await cookies();
   const v = jar.get("currentCampaignId")?.value?.trim();
   return v || null;
 }
 
-/** GET /api/resources/:id —— 读取单条资源（受当前战役限制） */
+/** GET /api/resources/:id — Read a single resource (restricted to current campaign) */
 export async function GET(
   _req: Request,
-  ctx: { params: Promise<{ id: string }> } // Next 15: params 是 Promise
+  ctx: { params: Promise<{ id: string }> } // Next 15: params is a Promise
 ) {
   try {
-    const { id } = await ctx.params; // 先 await
+    const { id } = await ctx.params; // await first
     const campaignId = await getCurrentCampaignId();
     if (!campaignId) {
       return NextResponse.json({ ok: false, error: "no current campaign" }, { status: 401 });
@@ -35,7 +35,7 @@ export async function GET(
         category: true,
         fileUrl: true,
         previewUrl: true,
-        gridCols: true,   // 若 schema 未添加这些字段，请删掉对应行
+        gridCols: true,   // If schema doesn't have these fields, remove corresponding lines
         gridRows: true,
         lightI: true,
         lightJ: true,
@@ -55,7 +55,7 @@ export async function GET(
   }
 }
 
-/** DELETE /api/resources/:id —— 删除单条资源（受当前战役限制） */
+/** DELETE /api/resources/:id — Delete a single resource (restricted to current campaign) */
 export async function DELETE(
   _req: Request,
   ctx: { params: Promise<{ id: string }> }
@@ -67,7 +67,7 @@ export async function DELETE(
       return NextResponse.json({ ok: false, error: "no current campaign" }, { status: 401 });
     }
 
-    // 校验归属，并取出 fileUrl 以便删除本地文件
+    // Verify ownership and retrieve fileUrl for deletion
     const exist = await prisma.resource.findFirst({
       where: { id, campaignId },
       select: { id: true, fileUrl: true },
@@ -76,15 +76,15 @@ export async function DELETE(
       return NextResponse.json({ ok: false, error: "not found" }, { status: 404 });
     }
 
-    // 若是我们本地 /public/uploads 下的文件，同时删除文件（失败忽略）
+    // If it's a local /public/uploads file, delete the file as well (ignore failure)
     const fileUrl = exist.fileUrl || "";
     if (fileUrl && /^\/uploads\//.test(fileUrl)) {
-      const rel = fileUrl.replace(/^\//, ""); // 去掉开头的 /
+      const rel = fileUrl.replace(/^\//, ""); // remove leading slash
       const abs = path.join(process.cwd(), "public", rel);
       await unlink(abs).catch(() => {});
     }
 
-    // 删库
+    // Delete from database
     await prisma.resource.delete({ where: { id } });
 
     return NextResponse.json({ ok: true }, { status: 200 });
@@ -94,8 +94,8 @@ export async function DELETE(
   }
 }
 
-/** PATCH /api/resources/:id —— 部分更新
- * 接收 JSON：
+/** PATCH /api/resources/:id — Partial update
+ * Accepts JSON:
  * { gridCols?, gridRows?, lightI?, lightJ?, lightRadius? }
  */
 export async function PATCH(
@@ -112,7 +112,7 @@ export async function PATCH(
     const body = await req.json().catch(() => ({}));
     const data: Record<string, number> = {};
 
-    // 只允许这些字段（其余忽略），同时做基础约束
+    // Only allow these fields (ignore others) and apply basic constraints
     if (typeof body.gridCols === "number")   data.gridCols   = Math.max(1, Math.floor(body.gridCols));
     if (typeof body.gridRows === "number")   data.gridRows   = Math.max(1, Math.floor(body.gridRows));
     if (typeof body.lightI === "number")     data.lightI     = Math.max(0, Math.floor(body.lightI));
@@ -123,7 +123,7 @@ export async function PATCH(
       return NextResponse.json({ ok: false, error: "no valid fields" }, { status: 400 });
     }
 
-    // 先确认归属
+    // Verify ownership
     const exist = await prisma.resource.findFirst({
       where: { id, campaignId },
       select: { id: true },
@@ -132,7 +132,7 @@ export async function PATCH(
       return NextResponse.json({ ok: false, error: "not found" }, { status: 404 });
     }
 
-    // 更新
+    // Update record
     const updated = await prisma.resource.update({
       where: { id },
       data,
