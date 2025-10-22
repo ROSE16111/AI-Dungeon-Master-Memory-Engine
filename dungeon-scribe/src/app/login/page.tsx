@@ -123,7 +123,6 @@ export default function LoginPage() {
 
   const canSubmit = !!(campaign && role);
 
-  // useEffect：首次加载时调用 GET /api/data，从数据库中拉取所有 Campaign 和 Role
   useEffect(() => {
     (async () => {
       const res = await fetch("/api/data");
@@ -164,13 +163,13 @@ export default function LoginPage() {
 
   if (!res.ok) throw new Error(data.error || "Failed to create campaign");
 
-  // 更新前端状态
+  // update front end
   setCampaigns((prev) => [...prev, name]);
   setRolesByCampaign((prev) => ({ ...prev, [name]: [] }));
   setCampaign(name);
 }
 
-  //create a Role用 POST /api/data
+  //create a Role ues POST /api/data
   async function createRoleLocal(name: string) {
   if (!campaign) throw new Error("Please select a campaign first");
 
@@ -188,7 +187,7 @@ export default function LoginPage() {
 
   if (!res.ok) throw new Error(data.error || "Failed to create role");
 
-  // 更新前端状态
+  // update front end
   setRolesByCampaign((prev) => ({
     ...prev,
     [campaign]: [...(prev[campaign] || []), name],
@@ -196,12 +195,11 @@ export default function LoginPage() {
   setRole(name);
 }
 
-// 新增：把当前 Campaign 写入 httpOnly Cookie
+//write Campaign  httpOnly Cookie
   async function setCurrentCampaignCookie(campaignTitle: string, remember: boolean) {
     const res = await fetch("/api/current-campaign", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      // 这里传 title，后端会用 title 查 id 再写 cookie（如果你的后端只收 id，也可把 title 换成 id）
       body: JSON.stringify({ title: campaignTitle, remember }),
     });
     if (!res.ok) {
@@ -214,7 +212,7 @@ export default function LoginPage() {
     e.preventDefault();
     if (!canSubmit || !campaign) return;
     try {
-      await setCurrentCampaignCookie(campaign, remember); // ← 关键：把选中的 campaign 写入 Cookie
+      await setCurrentCampaignCookie(campaign, remember);
       // After cookie is set, read back the current campaign id/title and persist to localStorage
       try {
         const res = await fetch('/api/current-campaign');
@@ -229,8 +227,6 @@ export default function LoginPage() {
         // Not fatal — pages will still read cookie via server API where supported
         console.warn('Failed to persist current campaign to localStorage', err);
       }
-
-      // 这里如果你还想同时记住 role，也可以再调一个 /api/current-role 接口写 cookie
       router.push("/dashboard");
     } catch (err: any) {
       alert(err?.message || "Login failed");
