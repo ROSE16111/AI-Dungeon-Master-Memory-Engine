@@ -4,14 +4,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { SummaryType } from "@prisma/client";
 
-// GET Campaign的相关信息或特定Campaign的Roles
+// GET Campaign information
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const type = searchParams.get("type");
   const campaignId = searchParams.get("campaignId");
 
   try {
-    // 获取特定Campaign的Roles
+    // get the specific Roles of Campaign
     if (type === "roles" && campaignId) {
       const campaign = await prisma.campaign.findUnique({
         where: { id: campaignId },
@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
       }
 
-      // 合并角色基本信息和角色总结
+      // merge character information
       const rolesWithSummaries = campaign.roles.map((role) => {
         const summary = campaign.summaries.find((s) => s.roleName === role.name);
         return {
@@ -42,7 +42,6 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ roles: rolesWithSummaries });
     }
 
-    // 默认获取所有Campaigns
     const campaigns = await prisma.campaign.findMany({
       include: {
         roles: true,
@@ -92,7 +91,7 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// 创建 Campaign或Role,更改summary
+// create Campaign or Role,edit summary
 export async function POST(req: NextRequest) {
   const body = await req.json();
   const url = new URL(req.url);
@@ -140,7 +139,7 @@ export async function POST(req: NextRequest) {
       await prisma.campaign.update({ where: { id: campaignId }, data: { updateDate: new Date() } });
       return NextResponse.json({ ok: true, summary });
     }
-    // 创建Campaign
+    // create Campaign
     if (type === "campaign") {
       const { title } = body;
       if (!title) {
@@ -159,7 +158,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ campaign: newCampaign });
     }
 
-    // 创建Role
+    //  create Role
     if (type === "role") {
       const { campaignTitle, name } = body;
       if (!campaignTitle || !name) {
