@@ -151,7 +151,7 @@ function UploadModal({
 
   return (
     <div className="fixed inset-0 z-[1000]">
-      {/* 背景 */}
+      {/* background */}
       <div
         className="absolute inset-0 bg-black/55 backdrop-blur-[1px] z-0"
         onClick={() => {
@@ -160,7 +160,7 @@ function UploadModal({
         }}
       />
 
-      {/* 主框 */}
+      {/* text box*/}
       <div
         className="absolute z-10 rounded-[20px] shadow-2xl"
         style={{
@@ -182,7 +182,7 @@ function UploadModal({
           ✕
         </button>
 
-        {/* 文件拖拽/选择框 */}
+        {/* File drag-and-drop / file selection box*/}
         <div
           className="absolute cursor-pointer"
           style={{
@@ -228,7 +228,7 @@ function UploadModal({
           </div>
         </div>
 
-        {/* 文件信息 */}
+        {/* file information */}
         {file && (
           <div
             className="absolute left-[4%] right-[4%] rounded-[40px] bg-[#EEF1F7] px-6 py-5"
@@ -298,14 +298,14 @@ export default function DashboardPage() {
 
   const [openUpload, setOpenUpload] = useState(false);
   const [starting, setStarting] = useState(false);
-  // 当前 Campaign 标题
+  // Campaign title
   const [campaignTitle, setCampaignTitle] = useState<string | null>(null);
 
   useEffect(() => {
     if (sp.get("open") === "upload") setOpenUpload(true);
   }, [sp]);
 
-  // NEW: 读取当前 campaign
+  // NEW: read campaign
   useEffect(() => {
     (async () => {
       try {
@@ -314,7 +314,6 @@ export default function DashboardPage() {
         const data = await res.json();
 
         /**
-         * 兼容三种返回：
          * 1) { ok: true, item: { id, name } }
          * 2) { id, title }
          * 3) { ok: true, item: { id, title } }
@@ -326,9 +325,6 @@ export default function DashboardPage() {
           null;
 
         setCampaignTitle(title);
-
-
-        // 如果你想“没选就回登录”，解开下面这行：
         // if (!data?.id) router.push("/login");
       } catch {
         setCampaignTitle(null);
