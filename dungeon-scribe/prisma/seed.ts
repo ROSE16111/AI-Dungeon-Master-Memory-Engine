@@ -6,11 +6,12 @@ import { fileURLToPath } from 'url';
 
 const prisma = new PrismaClient();
 
-// 兼容 ESM 的 __dirname
+// Compatible __dirname for ESM
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// 读取图片并转 Base64（可选）
+
+// Read an image and convert it to Base64 (optional)
 function encodeImageToBase64(filePath: string): string {
   const buf = fs.readFileSync(filePath);
   const ext = path.extname(filePath).slice(1);
@@ -18,7 +19,7 @@ function encodeImageToBase64(filePath: string): string {
 }
 
 async function main() {
-  // --- 示例图片（如果不存在就跳过） ---
+  // --- Example image (skip if it doesn't exist) ---
   const imgPath = path.join(__dirname, '../public/summary.png');
   const imageBase64 = fs.existsSync(imgPath) ? encodeImageToBase64(imgPath) : undefined;
 
