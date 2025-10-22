@@ -1,7 +1,7 @@
 import { Cinzel } from 'next/font/google';
 
-// Cinzel Decorative 也可以，但常规 Cinzel 更稳妥
+// Cinzel Decorative is also available, but regular Cinzel is more stable
 export const cinzel = Cinzel({
   subsets: ['latin'],
-  weight: ['400', '700', '900'], // 导航用 700/900 比较有气势
+  weight: ['400', '700', '900'], // Use 700/900 for a stronger navigation presence
 });
