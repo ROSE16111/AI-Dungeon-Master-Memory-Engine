@@ -10,17 +10,17 @@ declare module 'sbd' {
 declare module 'pdf-parse' {
   export interface PDFParseResult {
     text: string;
-    // 还有很多字段，这里只声明你会用到的
+    // Other fields exist, but only the used ones are declared here
   }
   const pdf: (data: Buffer | Uint8Array) => Promise<PDFParseResult>;
   export default pdf;
 }
 
-// @node-rs/jieba 的简易类型（包含 extract）
+// Minimal type definitions for @node-rs/jieba (includes extract)
 declare module '@node-rs/jieba' {
   export function extract(
     text: string,
     topN?: number
   ): Array<{ keyword: string; weight: number }>;
-  // 预留：需要再用时可加 cut/tag 等
+  // Reserved: add cut/tag/etc. later if needed
 }
