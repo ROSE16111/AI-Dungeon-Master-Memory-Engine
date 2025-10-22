@@ -4,8 +4,6 @@ import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { TopBar } from "@/components/layout/topbar";
-
-/* （可选）锁定滚动：History 列表页面通常需要滚动，这里先不用 */
 function useLockBodyScroll() {
   useEffect(() => {
     const prev = document.body.style.overflow;
@@ -183,8 +181,7 @@ function CardDisplay({
     <div className="relative w-[300px] bg-white rounded-xl shadow-lg overflow-hidden border border-black/10">
       {/* Completed / In Progress icon */}
       {/* <ProgressBadge completed={story.completed} /> */}
-
-      {/* 删除按钮右上角 */}
+      {/* delete button */}
       <button
         onClick={() => onDelete(story)}
         className="absolute top-2 right-2 z-30 p-2 bg-white/85 rounded-full hover:bg-red-100 active:scale-95 transition shadow"
@@ -486,22 +483,19 @@ export default function HistoryPage() {
       }
     }
   };
-
-  // 删除函数：带确认提示
+  
   const handleDelete = (story: Story) => {
     if (
       window.confirm(
         `Are you sure you want to delete "${story.title}"? This action cannot be undone.`
       )
     ) {
-      // 1️⃣ 请求后端删除
       fetch(`/api/data?id=${story.id}`, { method: "DELETE" })
         .then(async (res) => {
           if (!res.ok) {
             const body = await res.text().catch(() => "");
             throw new Error(body || `Delete failed (status ${res.status})`);
           }
-          // 2️⃣ 从本地删除
           setStories((prev) => prev.filter((s) => s.id !== story.id));
         })
         .catch((err) => {
@@ -509,7 +503,6 @@ export default function HistoryPage() {
           alert(err?.message || "Failed to delete record");
         });
     } else {
-      // 用户取消
       console.log("Delete canceled");
     }
   };
@@ -532,7 +525,7 @@ export default function HistoryPage() {
       {/* TopBar */}
       <TopBar />
 
-      {/* Stage：改为容器 + 内边距，不再 absolute+calc */}
+    {/* Stage: changed to a container with padding, no longer using absolute+calc */}
       <main className="mx-auto max-w-[1200px] px-4 sm:px-6 lg:px-8 pt-6 pb-16 flex flex-col items-center">
         {/*Title + Dropdown menu*/}
         <HistoryFilter value={activeTab} onChange={setActiveTab} />
