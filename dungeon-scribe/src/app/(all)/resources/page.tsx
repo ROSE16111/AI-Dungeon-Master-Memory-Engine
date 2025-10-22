@@ -2,11 +2,13 @@
 shadcn apply：card/button/badge/Dialog/Input ；
 filter near head: TitleWithFilter 
 
-scroll：6 cards per page，keyboard ←/→ 也能控制。
+scroll：6 cards per page，keyboard ←/→ can control。
 
-data：示例里用 MOCK_SESSIONS 和 MOCK_CHARACTERS 两套数据；接入后端时只要把 data 换成 fetch 结果即可。
+data: The example uses two mock datasets — MOCK_SESSIONS and MOCK_CHARACTERS.
+When connecting to the backend, simply replace data with the fetch result.
 
-Add New：点击后弹出 Dialog；handleCreate 留了 TODO，按你现有 /api/data 的写法对接就行
+Add New: Opens a Dialog when clicked.
+The handleCreate function has a TODO placeholder — connect it following your existing /api/data implementation.
 */
 
 "use client";
@@ -48,7 +50,7 @@ function useLockBodyScroll() {
   }, []);
 }
 
-/* --------------------------------- 标题旁 Filter --------------------------------- */
+/* ---------------------------------Filter beside title --------------------------------- */
 function MenuItem({
   children,
   active,
@@ -165,7 +167,7 @@ type CardItem = {
   img: string;
   tag?: string;
   category: Category;
-  /* ✅ 新增：上传后返回的原文件 URL，用于 View Details / Open / download */
+  /*  View Details / Open / download */
   fileUrl?: string;
 };
 
@@ -173,7 +175,7 @@ type CardItem = {
 function ResourceCard({
   it,
   onOpen,
-  onDelete, // ✅ 新增
+  onDelete, 
 }: {
   it: CardItem;
   onOpen: (item: CardItem) => void;
@@ -184,14 +186,13 @@ function ResourceCard({
 
   return (
     <Card className="overflow-hidden rounded-2xl bg-white/90 backdrop-blur relative">
-      {/* ✅ 垃圾桶按钮右上角 */}
+      {/* / Trash bin button at the top-right corner*/}
       <button
         onClick={() => onDelete(it)}
         className="absolute top-2 right-2 z-30 p-2 bg-white/85 rounded-full hover:bg-red-100 active:scale-95 transition shadow"
         aria-label="Delete resource"
         title="Delete this resource"
       >
-        🗑️
       </button>
 
       <CardHeader className="p-0">
@@ -230,18 +231,19 @@ function ResourceCard({
 
       <CardFooter className="px-4 pb-2 pt-0 justify-end gap-2">
         {it.category === "Map" ? (
-          // ✅ Map：进入新的网格+光照视图页面
+          // Map: Opens a new page with grid and lighting view
           <Button asChild size="sm">
             <Link href={`/resources/mapview/${it.id}`}>Open</Link>
           </Button>
         ) : (
-          // ✅ 其他类型：沿用你现有的 onOpen(it)
+          //  Other types: reuse your existing onOpen(it)
+
           <Button variant="outline" size="sm" onClick={() => onOpen(it)}>
             Open
           </Button>
         )}
 
-        {/* download 保持不变 */}
+        {/* download keep*/}
         <Button asChild variant="outline" size="sm">
           <Link
             href={detailsHref}
@@ -269,7 +271,7 @@ function AddNewCard({
       type="button"
       onClick={onClick}
       variant="outline"
-      className="h-[212px] w-full rounded-2xl border-2 border-dashed bg-white/20 text-white/90 hover:bg-white/30" /* ✅ 修正了白色的 typo */
+      className="h-[212px] w-full rounded-2xl border-2 border-dashed bg-white/20 text-white/90 hover:bg-white/30" /* fix the white typo */
     >
       <div className="flex flex-col items-center gap-3">
         <div className="flex h-12 w-12 items-center justify-center rounded-xl border border-white/60">
@@ -289,25 +291,25 @@ export default function ResourcesPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [createName, setCreateName] = useState("");
 
-  // 你的文件上传 & 列表逻辑保留
+  // Keep your existing file upload & list logic
   const [createFile, setCreateFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
 
-  // ✅ 用后端数据（不要再用 MOCK_RESOURCES，以免状态打架）
+  // ✅ Use backend data (stop using MOCK_RESOURCES to avoid state conflicts)
   const [items, setItems] = useState<CardItem[]>([]);
 
-  /* ✅ 新增：用于 Open 弹层的状态 */
+  /* ✅ New: State for Open dialog */
   const [selectedItem, setSelectedItem] = useState<CardItem | null>(null);
   const [selectedContent, setSelectedContent] = useState<string>("");
 
-  /* 原有：按分类过滤（基于当前 tab） */
+  /* Existing: Filter by category (based on current tab) */
   const data = useMemo(
     () => items.filter((it) => it.category === view),
     [items, view]
   );
 
-  // ---------------------- 接入后端：拉取资源列表 ----------------------
-  // 拉取当前 Tab 的资源；切换 Tab 时重新拉。
+  // ---------------------- Connect to backend: fetch resource list ----------------------
+  // Fetch resources for the current tab; re-fetch when switching tabs.
   useEffect(() => {
     const controller = new AbortController();
 
@@ -330,21 +332,21 @@ export default function ResourcesPage() {
           }>;
         } = await res.json();
 
-        // 后端记录映射到前端 CardItem
+        // Map backend records to frontend CardItem
         const arr: CardItem[] = (json.items || []).map((r) => ({
           id: r.id,
           title: r.title,
           subtitle: "View Details",
           img: r.previewUrl || r.fileUrl || "/historypp.png",
-          tag: r.category, // 右上角小 Badge
-          category: view, // 这里用当前 Tab 作为前端分类（也可按 r.category 严格映射）
+          tag: r.category, // Small badge on the top-right corner
+          category: view, // Use current tab as frontend category (or strictly map via r.category)
           fileUrl: r.fileUrl,
         }));
 
         setItems(arr);
-        setIndex(0); // 切换 Tab 回到第一页
+        setIndex(0); // Return to first page when switching tabs
       } catch (err: any) {
-        // ✅ 忽略开发模式下的 AbortError
+        //  Ignore AbortError in development mode
         if (err?.name === "AbortError") return;
         console.error(err);
         setItems([]);
@@ -360,8 +362,8 @@ export default function ResourcesPage() {
     };
   }, [view]);
 
-  // ---------------------- 分页切片（6/页） ----------------------
-  // 先得到一个“最终列表”：所有资源 + 末尾的 Add 卡片
+  // ---------------------- Pagination slicing (6 per page) ----------------------
+  // First, create a “final list”: all resources + an Add card at the end
   const listWithAdd = useMemo(() => {
     const list = [...data];
     list.push({
@@ -373,7 +375,7 @@ export default function ResourcesPage() {
     return list;
   }, [data, view]);
 
-  // 再把它按 6 个一页切片
+  // Then slice it into pages of 6 items each
   const pages: CardItem[][] = useMemo(() => {
     const len = listWithAdd.length;
     const pageCount = Math.ceil(len / 6);
@@ -382,7 +384,7 @@ export default function ResourcesPage() {
     );
   }, [listWithAdd]);
 
-  // 页面保护（避免因页数变化出现越界）
+  // Page guard (prevent out-of-range index when page count changes)
   const [index, setIndex] = useState(0);
   useEffect(() => {
     setIndex((i) => Math.min(i, Math.max(0, pages.length - 1)));
@@ -392,7 +394,7 @@ export default function ResourcesPage() {
   const go = (dir: -1 | 1) =>
     setIndex((i) => Math.min(max, Math.max(0, i + dir)));
 
-  // keyboard ←/→ 也能控制。
+  // Keyboard ←/→ navigation support
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "ArrowLeft") go(-1);
@@ -402,7 +404,7 @@ export default function ResourcesPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [max]);
 
-  /* handleCreate 创建新的卡片 */
+  /* handleCreate: create a new card */
   async function handleCreate() {
     if (!createName.trim() || !createFile) return;
     try {
@@ -418,7 +420,7 @@ export default function ResourcesPage() {
       const json: { id: string; url: string; preview?: string } =
         await res.json();
 
-      // ✅ 乐观更新（也可以选择重新 GET 一次最新列表）
+      // ✅ Optimistic update (or optionally re-fetch the latest list)
       const newItem: CardItem = {
         id: json.id || `${view}-${Date.now()}`,
         title: createName.trim(),
@@ -445,15 +447,15 @@ export default function ResourcesPage() {
     }
   }
 
-  /* ✅ 强制把任何路径（绝对路径/本地磁盘/完整URL/测试目录）转成 /uploads/文件名 */
+  /* ✅ Force-convert any path (absolute path, local disk, full URL, or test directory) into /uploads/filename */
   function normalizeToUploadsUrl(x: string | undefined | null) {
     if (!x) return "";
-    // 只保留文件名
+    // Keep only the filename
     const fileName = (x.split(/[/\\]/).pop() || "").trim();
     return fileName ? `/uploads/${fileName}` : "";
   }
 
-  // Open：弹出浮层并读取文件文本（你的 /api/readFile 写法保持不变）
+  // Open: show modal and read file text (keep your existing /api/readFile logic unchanged)
   async function handleOpen(item: CardItem) {
     setSelectedItem({ ...item });
     setSelectedContent("(Loading...)");
@@ -486,16 +488,16 @@ export default function ResourcesPage() {
     }
   }
 
-  // ✅ 删除函数（弹出确认提示）
+  // ✅ Delete function (with confirmation prompt)
   function handleDelete(item: CardItem) {
     if (
       window.confirm(
         `Are you sure you want to delete "${item.title}"? This action cannot be undone.`
       )
     ) {
-      // 1️⃣ 前端立即移除
+      // 1️⃣ Immediately remove from frontend
       setItems((prev) => prev.filter((x) => x.id !== item.id));
-      // 2️⃣ 通知后端删除
+      // 2️⃣ Notify backend to delete
       fetch(`/api/resources/${encodeURIComponent(item.id)}`, { method: "DELETE" })
         .then((res) => {
           if (!res.ok) throw new Error("Failed to delete resource");
@@ -514,9 +516,9 @@ export default function ResourcesPage() {
         }}
       />
 
-      {/** 轨道宽 N×100%，每个页宽 = 100% / N，位移步长 = 100% / N*/}
+      {/** Track width = N × 100%, each page width = 100% / N, move step = 100% / N */}
       <section className="relative mx-auto mt-0 max-w-6xl ">
-        {/* 这个 wrapper 专门用来裁剪轨道溢出 */}
+        {/* This wrapper is specifically for clipping overflow from the track */}
         <div className="overflow-hidden">
           <div
             className="flex transition-transform duration-300"
@@ -552,7 +554,7 @@ export default function ResourcesPage() {
                         key={`${it.id}-${i}`}
                         it={it}
                         onOpen={handleOpen}
-                        onDelete={handleDelete} // ✅ 新增
+                        onDelete={handleDelete} 
                       />
                     )
                   )}
@@ -614,7 +616,7 @@ export default function ResourcesPage() {
         </div>
       </section>
 
-      {/* 你的 Create 弹窗保持不变 */}
+      {/* Keep your Create dialog unchanged */}
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent className="sm:max-w-[420px]">
           <DialogHeader>
@@ -638,7 +640,7 @@ export default function ResourcesPage() {
               onChange={(e) => setCreateName(e.target.value)}
             />
 
-            {/* 自定义文件上传按钮（保持你之前的做法） */}
+            {/*Custom file upload button (keep your previous implementation) */}
             <label className="flex flex-col items-center px-4 py-6 bg-white rounded-lg shadow-md tracking-wide uppercase border border-gray-300 cursor-pointer hover:bg-gray-100">
               {createFile && createFile.type.startsWith("image/") ? (
                 <img
@@ -686,18 +688,18 @@ export default function ResourcesPage() {
         </DialogContent>
       </Dialog>
 
-      {/* ✅ 新增：Open 弹出的浮层卡片，其他不受影响 */}
+      {/* ✅ New: Floating card for Open dialog; other elements remain unaffected */}
       {selectedItem && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="relative bg-white rounded-2xl p-6 max-w-3xl w-full shadow-xl">
-            {/* 头部：缩略图 + 标题 */}
+            {/* Header: thumbnail + title */}
             <div className="flex items-center gap-4 mb-6">
               <img
                 src={selectedItem.img}
                 alt={selectedItem.title || "preview"}
                 className="h-16 w-24 object-cover rounded-md"
               />
-              {/* 让标题占满剩余空间，避免被 flex 挤没 */}
+              {/* Let the title take up remaining space to prevent flex overflow */}
               <div className="flex-1 min-w-0">
                 <h2 className="text-2xl font-extrabold text-gray-900 leading-tight break-words">
                   {selectedItem?.title?.trim()?.length
@@ -707,12 +709,11 @@ export default function ResourcesPage() {
               </div>
             </div>
 
-            {/* 内容文本 */}
+            {/* Content text */}
             <div className="max-h-[65vh] overflow-y-auto whitespace-pre-line text-gray-800 leading-relaxed">
               {selectedContent || "(No content)"}
             </div>
-
-            {/* 右上角关闭按钮 */}
+            {/* Close button at top-right */}
             <button
               onClick={() => setSelectedItem(null)}
               className="absolute top-3 right-3 h-8 w-8 flex items-center justify-center rounded-full bg-gray-200 hover:bg-gray-300"
