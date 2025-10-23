@@ -1017,7 +1017,7 @@ function CharacterCarouselStacked({
     return <div className="text-center text-white">Loading characters...</div>;
   }
 
-  if (N === 0) {
+  {/*if (N === 0) {
     return (
       <div className="text-center text-white">
         No characters found.
@@ -1046,7 +1046,7 @@ function CharacterCarouselStacked({
         </div>
       </div>
     );
-  }
+  }*/}
 
   function Card({
     data,
@@ -1321,23 +1321,28 @@ function CharacterCarouselStacked({
                 
 
               </div>
+              // Side-card title: anchor to bottom, single-line ellipsis, slightly smaller font
               <div
                 className="absolute"
-                style={{ left: "4.26%", right: "35%", top: "77.5%" }}
+                style={{ left: "4.26%", right: "8%", bottom: "6%" }} // use bottom instead of top
               >
                 <div
                   className="text-[#1D1D1D]"
                   style={{
                     fontFamily: '"Abhaya Libre ExtraBold", serif',
                     fontWeight: 800,
-                    fontSize: 24,
-                    lineHeight: "28px",
+                    fontSize: 20,          // smaller on side cards
+                    lineHeight: "24px",
+                    whiteSpace: "nowrap",  // keep in one line
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
                   }}
+                  title={data.name}        // full title on hover
                 >
                   {data.name}
                 </div>
               </div>
-              <div
+              {/*<div
                 className="absolute"
                 style={{ left: "4.26%", right: "50.13%", top: "87.38%" }}
               >
@@ -1348,7 +1353,7 @@ function CharacterCarouselStacked({
                 >
                   View Details
                 </button>
-              </div>
+              </div>*/}
             </div>
             {/* Back */}
             <div
@@ -1392,7 +1397,23 @@ function CharacterCarouselStacked({
       </div>
     );
   }
-
+  
+  // N === 0: empty state card
+  if (N === 0) {
+    return (
+      <div
+          className="relative"
+          style={{ width: 730, height: 438, left: 0, top: -100, zIndex: 30 }}
+      >
+        <div className="absolute inset-0 rounded-[24px] bg-white/80 shadow-xl flex flex-col items-center justify-center gap-4">
+          <div className="text-2xl font-semibold text-neutral-800">No characters yet</div>
+          <div className="text-neutral-600">started your adventure to generate automatically</div>
+        </div>
+      </div>
+    );
+  }
+  
+  //else return
   return (
     <div
       className="relative"
@@ -1459,8 +1480,19 @@ function CharacterCarouselStacked({
       )}
 
       {/* // Three display slots*/}
+      {/* Display slots: 1 card when N=1; 2 cards when N=2; 3 cards when N>=3 */}
       <div className="relative" style={{ height: 438 }}>
-        <Card data={items[idxL]} type="left" index={idxL} onUpload={handleUploadCover} />
+        {/* N>=3: show left */}
+        {N >= 3 && (
+          <Card
+            data={items[idxL]}
+            type="left"
+            index={idxL}
+            onUpload={handleUploadCover}
+          />
+        )}
+
+        {/* Always show center */}
         <Card
           data={items[cur]}
           type="center"
@@ -1469,8 +1501,18 @@ function CharacterCarouselStacked({
           direction={direction}
           onUpload={handleUploadCover}
         />
-        <Card data={items[idxR]} type="right" index={idxR} onUpload={handleUploadCover} />
+
+        {/* N>=2: show right (so total = 2 when N=2; total = 3 when N>=3) */}
+        {N >= 2 && (
+          <Card
+            data={items[idxR]}
+            type="right"
+            index={idxR}
+            onUpload={handleUploadCover}
+          />
+        )}
       </div>
+
 
       {/* Indicator dots: count = N*/}
       <div

@@ -121,8 +121,9 @@ export default function LoginPage() {
   const [openCreateCampaign, setOpenCreateCampaign] = useState(false);
   const [openCreateRole, setOpenCreateRole] = useState(false);
 
-  const canSubmit = !!(campaign && role);
-
+  //const canSubmit = !!(campaign && role);
+  // Only campaign is required now
+  const canSubmit = !!campaign;
   useEffect(() => {
     (async () => {
       const res = await fetch("/api/data");
@@ -218,9 +219,10 @@ export default function LoginPage() {
         const res = await fetch('/api/current-campaign');
         if (res.ok) {
           const json = await res.json();
-          if (typeof window !== 'undefined') {
-            if (json?.id) localStorage.setItem('currentCampaignId', json.id);
-            if (json?.title) localStorage.setItem('currentCampaignTitle', json.title);
+          const item = json?.item;
+          if (typeof window !== "undefined" && item) {
+            if (item.id) localStorage.setItem("currentCampaignId", item.id);
+            if (item.name) localStorage.setItem("currentCampaignTitle", item.name);
           }
         }
       } catch (err) {
@@ -309,7 +311,7 @@ export default function LoginPage() {
             {/* Role */}
             <div className="space-y-2">
               <Label className="text-sm text-neutral-300">
-                Choose your Role
+                <strong>Optional</strong>: Choose your Role who is already in
               </Label>
               <div className="flex items-center gap-2">
                 <div className="flex-1">
@@ -332,7 +334,7 @@ export default function LoginPage() {
                 </div>
 
                 {/* Create Role */}
-                <Dialog open={openCreateRole} onOpenChange={setOpenCreateRole}>
+                {/*<Dialog open={openCreateRole} onOpenChange={setOpenCreateRole}>
                   <DialogTrigger asChild>
                     <Button
                       type="button"
@@ -354,7 +356,7 @@ export default function LoginPage() {
                   placeholder="Enter role name"
                   onCreate={createRoleLocal}
                   disabled={!campaign}
-                />
+                />*/}
               </div>
             </div>
 
@@ -374,14 +376,17 @@ export default function LoginPage() {
 
             {/* Submit */}
             <Button
-              type="submit"
-              disabled={!canSubmit}
-              className="w-full h-12 text-base rounded-full
-                         bg-neutral-400 hover:bg-neutral-300 text-black
-                         disabled:opacity-60"
-            >
-              Log in
-            </Button>
+            type="submit"
+            disabled={!canSubmit}
+            // When campaign is selected, make the button pop; otherwise keep the greyed look
+            className={`w-full h-12 text-base rounded-full text-black transition-all duration-200
+              ${canSubmit
+                ? 'bg-amber-400 hover:bg-amber-300 shadow-[0_8px_20px_rgba(245,158,11,0.35)] hover:scale-[1.01] active:scale-[0.99]'
+                : 'bg-neutral-400 hover:bg-neutral-300 opacity-60 cursor-not-allowed'
+              }`}
+          >
+            Log in
+          </Button>
           </div>
         </form>
       </div>
