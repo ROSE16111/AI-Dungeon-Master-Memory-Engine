@@ -1270,30 +1270,24 @@ function CharacterCarouselStacked({
 
                 {/* Back */}
                 <div
-                  className="absolute inset-0 rounded-[20px] border border-[#E9E9E9] bg-white px-6 py-5 flex flex-col gap-3 [backface-visibility:hidden]"
-                  style={{ transform: "rotateY(180deg)" }}
-                  onClick={() => setFlippedIndex(null)}
-                >
-                  <div
-                    className="text-[#1D1D1D]"
-                    style={{
-                      fontFamily: '"Abhaya Libre ExtraBold", serif',
-                      fontWeight: 800,
-                      fontSize: 24,
-                    }}
-                  >
-                    {data.name}
-                  </div>
-                  <div
-                    className="text-[#333] whitespace-pre-line"
-                    style={{
-                      fontFamily: '"Inter", sans-serif',
-                      fontSize: 15,
-                      lineHeight: "24px",
-                    }}
-                  >
-                    {data.details}
-                  </div>
+                    className="absolute -inset-20 md:-inset-20 rounded-[24px] border border-[#E9E9E9] bg-white px-7 py-6
+                                flex flex-col gap-3 min-h-0 shadow-xl [backface-visibility:hidden]"
+                      style={{ transform: "rotateY(180deg)" }}
+                      onClick={() => setFlippedIndex(null)}
+                    >
+                    <div
+                      className="text-[#1D1D1D]"
+                      style={{ fontFamily: '"Abhaya Libre ExtraBold", serif', fontWeight: 800, fontSize: 24 }}
+                    >
+                      {data.name}
+                    </div>
+
+                    <div
+                      className="text-[#333] whitespace-pre-line flex-1 overflow-y-auto pr-2"
+                      style={{ fontFamily: '"Inter", sans-serif', fontSize: 15, lineHeight: "24px" }}
+                    >
+                      {data.details}
+                    </div>
                   <div className="mt-auto flex justify-end">
                     <button
                       className="px-4 py-2 rounded-md bg-[#3D2304] text-white hover:opacity-95 active:scale-95 transition cursor-pointer"
