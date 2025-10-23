@@ -1,4 +1,3 @@
-// llm.ts
 // Thresholds and hyperparameters for splitting, summarizing, and merging.
 // Values are tuned for short, factual recaps rather than creative writing.
 const LONG_THRESHOLD_WORDS = 1000;  // Single-pass summarization below this word count
@@ -7,10 +6,10 @@ const CHUNK_OVERLAP = 70;           // Overlap preserves context at chunk bounda
 const TEMP = 0.1;                   // Low temperature to reduce fabrication
 const MERGE_BATCH = 6;              // Number of chunk summaries merged per round
 
-// NEW: configurable max duration for a single LLM request (ms)
+// configurable max duration for a single LLM request (ms)
 const LLM_REQUEST_TIMEOUT_MS = Number(process.env.LLM_REQUEST_TIMEOUT_MS ?? 900_000); // 15 min
 
-// NEW: bounded network resiliency for streaming fetches
+// bounded network resiliency for streaming fetches
 const MAX_RETRIES = Number(process.env.LLM_REQUEST_RETRIES ?? 2); // total attempts = 1 + MAX_RETRIES
 const RETRY_BASE_MS = Number(process.env.LLM_RETRY_BASE_MS ?? 1500); // exponential backoff base
 const STALL_TIMEOUT_MS = Number(process.env.LLM_STALL_TIMEOUT_MS ?? 60_000); // abort if no bytes arrive for N ms
@@ -52,7 +51,6 @@ const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "phi3:medium";
  * Calls the Ollama REST API with a given prompt.
  * Adds basic timing and structured error logging for observability.
  * 
- * CHANGED: Implements #1 (retries + stall watchdog + early 'done' handling).
  *
  * @param prompt - Prompt text to send.
  * @param label - Console timer label to identify the request in logs.
@@ -64,25 +62,23 @@ async function callLLM(prompt: string, label: string): Promise<string> {
     const attemptLabel = attempt ? `${label} (retry ${attempt})` : label;
     console.time(attemptLabel);
 
-    // NEW: abort controller to bound total time on our side (independent of Undici header timeout)
+    // abort controller to bound total time on our side (independent of Undici header timeout)
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), LLM_REQUEST_TIMEOUT_MS);
 
     try {
-      // CHANGED: request streaming so headers arrive immediately (prevents headers-timeout)
+      // request streaming so headers arrive immediately (prevents headers-timeout)
       const res = await fetch(`${OLLAMA_HOST}/api/generate`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "Accept": "application/json" }, // NEW: Accept is explicit
+        headers: { "Content-Type": "application/json", "Accept": "application/json" },
         body: JSON.stringify({
           model: OLLAMA_MODEL,
           prompt,
-          stream: true,                 // CHANGED: stream instead of false
-          // NEW: keep model warm + keep outputs reasonably bounded so calls finish promptly
-          // (does not change content; part of #1 fix to reduce stalls/timeouts)
+          stream: true,
           options: { temperature: TEMP, num_predict: 220 },
           keep_alive: "30m",
         }),
-        signal: controller.signal,      // NEW: we control cancellation
+        signal: controller.signal,  
       });
 
       if (!res.ok) {
@@ -92,13 +88,12 @@ async function callLLM(prompt: string, label: string): Promise<string> {
         throw new Error("Ollama stream missing response body");
       }
 
-      // NEW: read NDJSON stream and append `response` chunks with stall watchdog
+      // read NDJSON stream and append `response` chunks with stall watchdog
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buf = "";
       let out = "";
 
-      // NEW (#1): stall watchdog — abort if no bytes arrive for STALL_TIMEOUT_MS
       let lastTick = Date.now();
       const stallTimer = setInterval(() => {
         if (Date.now() - lastTick > STALL_TIMEOUT_MS) {
@@ -126,18 +121,18 @@ async function callLLM(prompt: string, label: string): Promise<string> {
               if (typeof obj?.response === "string") {
                 out += obj.response;
               }
-              // NEW (#1): break early once Ollama signals completion to avoid tail hangs
+              // break early once Ollama signals completion to avoid tail hangs
               if (obj?.done) {
                 await reader.cancel().catch(() => {});
                 clearInterval(stallTimer);
                 const result = (out ?? "").trim();
                 console.timeEnd(attemptLabel);
                 clearTimeout(timer);
-                controller.abort(); // release socket
+                controller.abort(); 
                 return result;
               }
             } catch {
-              // swallow partial/garbled line; next chunk will complete it
+            
             }
           }
         }
@@ -154,7 +149,7 @@ async function callLLM(prompt: string, label: string): Promise<string> {
       console.timeEnd(attemptLabel);
       clearTimeout(timer);
 
-      // NEW (#1): retry only on network-ish failures / aborts
+      // retry only on network-ish failures / aborts
       const msg = String(err?.message || "");
       const name = String(err?.name || "");
       const isAbort = name === "AbortError";
@@ -211,10 +206,10 @@ Rules:
 - If a detail is uncertain in THIS CHUNK, omit it (do not guess).
 
 Output format:
-- Write 2–4 sections for THIS CHUNK.
+- Write 2-4 sections for THIS CHUNK.
 - Each section MUST follow this structure:
   • First line: a SHORT TITLE (do not include the word "Title").
-  • Next 1–3 lines: factual sentences about that topic.
+  • Next 1-3 lines: factual sentences about that topic.
 - Put ONE blank line between sections.
 - Do not label lines, do not add numbers, bullets, or hashes.
 
@@ -253,8 +248,6 @@ async function hierarchicalMerge(summaries: string[]): Promise<string> {
  * Merge prompt that de-duplicates facts and keeps chronological flow.
  * The output format mirrors the chunk summaries for consistency.
  *
- * CHANGED: wording to prevent literal "Title:" / "Line 1:" artifacts.
- *
  * @param summaries - Group of chunk summaries to merge.
  * @returns Merged summary text.
  */
@@ -268,10 +261,10 @@ MODE: VERBATIM-ONLY MERGE
 - If two statements contradict, prefer whichever is clearer and keep it neutral (omit speculation).
 
 OUTPUT:
-- Write 4–10 sections total.
+- Write 4-10 sections total.
 - Each section MUST follow this structure:
   • First line: a SHORT TITLE (do not include the word "Title").
-  • Next 1–3 lines: factual sentences.
+  • Next 1-3 lines: factual sentences.
 - Put ONE blank line between sections.
 - Do not label lines, do not add numbers, bullets, or hashes.
 
@@ -287,8 +280,6 @@ FINAL SUMMARY:
  * High-level entry point for summarizing an entire session transcript.
  * Short texts use a single prompt; long texts are chunked then merged.
  * Includes fallbacks to ensure a useful result even when some steps fail.
- *
- * CHANGED: wording in single-pass prompt to avoid literal labels.
  *
  * @param rawText - Full session transcript.
  * @returns Final summary string.
@@ -309,10 +300,10 @@ MODE: VERBATIM-ONLY RECAP
 - If something is unclear or missing, omit it.
 
 OUTPUT:
-- Write 4–8 sections.
+- Write 4-8 sections.
 - Each section MUST follow this structure:
   • First line: a SHORT TITLE (do not include the word "Title").
-  • Next 1–3 lines: concise factual sentences describing what happened.
+  • Next 1-3 lines: concise factual sentences describing what happened.
 - Put ONE blank line between sections.
 - Do NOT use lists or bullets. Do NOT add "###" or any heading markup.
 - Keep proper nouns exactly as written.
@@ -330,7 +321,7 @@ ${text}`;
   const miniSummaries: string[] = [];
 
   const CONCURRENCY = Number(process.env.LLM_CONCURRENCY ?? 3);
-  let idx = 0; // NEW
+  let idx = 0;
 
   async function worker() {
     while (true) {
@@ -340,7 +331,6 @@ ${text}`;
         const s = await summarizeChunk(chunks[i], i, chunks.length);
         if (s) miniSummaries.push(s);
       } catch {
-        // swallow per-chunk failures; retries happen inside callLLM
       }
     }
   }
@@ -353,7 +343,7 @@ ${text}`;
   if (miniSummaries.length === 0) {
     const clipped = text.split(/\s+/).slice(0, CHUNK_TEXT).join(" ");
     const fallbackPrompt = `You are a precise session scribe for a Dungeons & Dragons game.
-Summarize as 6–10 short sections, each with a short title on the first line and 1–3 factual sentences below it. 
+Summarize as 6-10 short sections, each with a short title on the first line and 1–3 factual sentences below it. 
 No bullets, no numbering, blank line between sections. Use only facts in the text.
 
 SESSION (CLIPPED):

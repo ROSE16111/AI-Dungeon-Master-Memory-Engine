@@ -797,7 +797,7 @@ function SessionsInsidePaper({
 }) {
   const { summary } = useTranscript();
 
-  const raw = summary || `Not content yet`;
+  const raw = summary || `INSTRUCTIONS \n Your summary will appear here. \n Click End Session to edit and save your session. \n The AI summariser may get things wrong, always check the output.`;
 
 // Parse into an array of {title, body}; can later be replaced with data from an API response
   type Block = { title: string; body: string };
@@ -1234,6 +1234,11 @@ function ChatWidget() {
                   <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_0_3px_rgba(16,185,129,.25)]"></span>
                   {busy ? "Thinking…" : "Online"}
                 </div>
+                    {/* compact disclaimer */}
+                  <div className="mt-1 text-[11px] text-white/90 flex items-center gap-1">
+                    <span aria-hidden>⚠️</span>
+                    <span className="truncate">AI may be wrong. Verify important details.</span>
+                  </div>
               </div>
             </div>
             <button
@@ -1349,6 +1354,8 @@ export default function RecordPage() {
 
   // Declare view first (avoid "used before declaration" error)
   const [view, setView] = useState<"sessions" | "character">("sessions");
+  
+  const [ending, setEnding] = useState(false);
 
   // Unified search state (only keep this one)
   const [q, setQ] = useState("");
@@ -1943,98 +1950,109 @@ export default function RecordPage() {
 
   // End Session: save AI summary to DB (update existing summary if present), cleanup and navigate
   const handleEndSession = async (): Promise<void> => {
-    // 1) Politely tell the ASR server we're done and wait for its ack/drain
+    if (ending) return;          // guard against double-clicks
+    setEnding(true);
     try {
-      await endStreamAndWait();
-    } catch {}
-
-    // 2) Resolve campaign context robustly
-    let campaignId = currentCampaignId?.trim() || null;
-    if (!campaignId) {
+      // 1) Politely tell the ASR server we're done and wait for its ack/drain
       try {
-        campaignId = (await getCampaignId()) || null;
+        await endStreamAndWait();
       } catch {}
-    }
-    if (!campaignId) {
-      try {
-        campaignId = window.localStorage.getItem("currentCampaignId") || null;
-      } catch {}
-    }
 
-    const campaignTitle = (
-      window?.localStorage?.getItem("currentCampaignTitle") ||
-      "Untitled Campaign"
-    ).trim();
-    const summaryText = summary || "";
-    const existingSummaryId =
-      typeof window !== "undefined"
-        ? window.localStorage.getItem("currentSummaryId")
-        : null;
-
-    if (!campaignId) {
-      console.error("[EndSession] Missing campaignId; not saving/navigating.");
-      alert("No campaign selected. Please select a campaign first.");
-      return;
-    }
-
-    // 3) Persist transcript/summary to backend
-    try {
-      const payload: any = {
-        text: transcript || "",
-        title: campaignTitle,
-        source: "live",
-        campaignId,
-        summary: summaryText,
-        useProvidedSummary: true,
-        skipCharacterExtraction: true,
-      };
-      if (existingSummaryId) payload.summaryId = existingSummaryId;
-
-      const res = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      if (res.ok) {
+      // 2) Resolve campaign context robustly
+      let campaignId = currentCampaignId?.trim() || null;
+      if (!campaignId) {
         try {
-          const data = await res.json();
-          if (data?.summaryId) {
-            window.localStorage.setItem("currentSummaryId", data.summaryId);
-          }
+          campaignId = (await getCampaignId()) || null;
         } catch {}
-      } else {
-        console.error("/api/analyze returned", res.status, await res.text());
+      }
+      if (!campaignId) {
+        try {
+          campaignId = window.localStorage.getItem("currentCampaignId") || null;
+        } catch {}
       }
 
-      // Fire-and-forget: upsert characters from the transcript
-      if (transcript?.trim()) {
-        fetch("/api/characters/upsert", {
+      const campaignTitle = (
+        window?.localStorage?.getItem("currentCampaignTitle") ||
+        "Untitled Campaign"
+      ).trim();
+      const summaryText = summary || "";
+      const existingSummaryId =
+        typeof window !== "undefined"
+          ? window.localStorage.getItem("currentSummaryId")
+          : null;
+
+      if (!campaignId) {
+        console.error("[EndSession] Missing campaignId; not saving/navigating.");
+        alert("No campaign selected. Please select a campaign first.");
+        return;
+      }
+
+      // 3) Persist transcript/summary to backend
+      try {
+        const payload: any = {
+          text: transcript || "",
+          title: campaignTitle,
+          source: "live",
+          campaignId,
+          summary: summaryText,
+          useProvidedSummary: true,
+          skipCharacterExtraction: true,
+        };
+        if (existingSummaryId) payload.summaryId = existingSummaryId;
+
+        const res = await fetch("/api/analyze", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ campaignId, text: transcript }),
-        }).catch((e) => console.warn("[CharUpsert] error:", e));
+          body: JSON.stringify(payload),
+        });
+
+        if (res.ok) {
+          try {
+            const data = await res.json();
+            if (data?.summaryId) {
+              window.localStorage.setItem("currentSummaryId", data.summaryId);
+            }
+          } catch {}
+        } else {
+          console.error("/api/analyze returned", res.status, await res.text());
+        }
+
+        // Fire-and-forget: upsert characters from the transcript
+        if (transcript?.trim()) {
+          fetch("/api/characters/upsert", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ campaignId, text: transcript }),
+          }).catch((e) => console.warn("[CharUpsert] error:", e));
+        }
+      } catch (e) {
+        console.error("Failed to save transcript/summary", e);
       }
+
+      // 4) Stop audio + WS, free resources
+      try {
+        cleanupRecording();
+      } catch (e) {
+        console.warn("cleanup failed", e);
+      }
+
+      // 5) Reset UI state so the page is fresh next time you return
+      try {
+        setTranscript("");
+        setSummary("");
+        window.localStorage.removeItem("currentSummaryId"); // don't accidentally "update" last summary
+      } catch {}
+
+      // 6) Navigate to the session summary page
+        router.push(`/campaigns/${campaignId}/summary`);
     } catch (e) {
-      console.error("Failed to save transcript/summary", e);
+      console.error("[EndSession] failed", e);
+      alert("Failed to end session. Please try again.");
+    } finally {
+      // If navigation happens, component will unmount anyway.
+      // If it didn’t (e.g., error), this ensures the UI unlocks.
+      setEnding(false);
     }
-
-    // 4) Stop audio + WS, free resources
-    try {
-      cleanupRecording();
-    } catch (e) {
-      console.warn("cleanup failed", e);
-    }
-
-    // 5) Reset UI state so the page is fresh next time you return
-    try {
-      setTranscript("");
-      setSummary("");
-      window.localStorage.removeItem("currentSummaryId"); // don't accidentally "update" last summary
-    } catch {}
-
-    // 6) Navigate to the session summary page
-    router.push(`/campaigns/${campaignId}/summary`);
   };
 
   // ======= Character carousel data/state (new style) ======= //
@@ -2297,9 +2315,11 @@ export default function RecordPage() {
               <button
                 onClick={handleEndSession}
                 className="ml-45 mt-6 font-bold text-[#3D2304] underline hover:text-[#A43718] cursor-pointer disabled:opacity-50"
-                type="button"
+                type="button"  
+                disabled={ending || (!transcript?.trim() && !summary?.trim())}
+                aria-busy={ending}
               >
-                End Session
+                {ending ? "Ending..." : "End Session"}
               </button>
             </div>
           </div>
