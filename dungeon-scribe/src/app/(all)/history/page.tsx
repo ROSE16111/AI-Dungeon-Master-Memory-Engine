@@ -606,7 +606,7 @@ export default function HistoryPage() {
                   className="mt-2 text-[15px] text-neutral-700"
                   style={{ fontFamily: '"Inter", sans-serif' }}
                 >
-                  start your{" "}
+                  Start your{" "}
                   <a
                     href="/dashboard"
                     className="underline underline-offset-4 decoration-2 hover:text-[#A43718] transition-colors"

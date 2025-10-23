@@ -1428,7 +1428,7 @@ function CharacterCarouselStacked({
       >
         <div className="absolute inset-0 rounded-[24px] bg-white/80 shadow-xl flex flex-col items-center justify-center gap-4">
           <div className="text-2xl font-semibold text-neutral-800">No characters yet</div>
-          <div className="text-neutral-600">started your adventure to generate automatically</div>
+          <div className="text-neutral-600">Start your adventure to generate automatically.</div>
         </div>
       </div>
     );

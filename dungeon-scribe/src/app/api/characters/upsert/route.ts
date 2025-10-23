@@ -258,18 +258,12 @@ export async function POST(req: Request) {
         // Execute all upserts in a transaction
         const rows = await prisma.$transaction(ops);
 
-        // Update campaign timestamp for synchronization
-        await prisma.campaign.update({
-        where: { id: campaignId },
-        data: { updateDate: new Date() },
-        select: { id: true },
-        });
-
         // Return lightweight list of updated character IDs and names
         const upserts = rows.map((r) => ({
         id: r.id,
         name: (r.roleName ?? "") || "",
         }));
+
         return NextResponse.json({ upserts });
     } catch (err: any) {
         console.error("POST /api/characters/upsert error:", err?.message || err);
