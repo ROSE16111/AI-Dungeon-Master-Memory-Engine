@@ -36,41 +36,41 @@ PARTIAL_INTERVAL = 0.9               # Seconds between partial ASR updates
 OVERLAP_SEC = 0.2                    # Overlap for partial decoding context
 
 # Summarization chunk sizing
-SUMMARY_CHUNK_CHARS = int(os.getenv("SUMMARY_CHUNK_CHARS", "240"))
+SUMMARY_CHUNK_CHARS = 240
 
 # Whisper configuration
-WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small")
-WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "cpu")     # "cpu" or "cuda"
-WHISPER_COMPUTE = os.getenv("WHISPER_COMPUTE", "int8")  # compute_type per faster-whisper
-LANG = os.getenv("ASR_LANG", "en")
-BEAM = int(os.getenv("BEAM", "1"))
+WHISPER_MODEL = "small"
+WHISPER_DEVICE = "cpu"
+WHISPER_COMPUTE ="int8"
+LANG = "en"
+BEAM = 1
 TEMP = 0.0
 
 # Vector store configuration
-DB_PATH = os.getenv("CHROMA_DB_PATH", "./chroma_db")
-COLLECTION_NAME = os.getenv("CHROMA_COLLECTION", "docs")
+DB_PATH = "./chroma_db"
+COLLECTION_NAME = "docs"
 
 # Ollama endpoints and models
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
-EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text")
+OLLAMA_URL = "http://127.0.0.1:11434"
+EMBED_MODEL = "nomic-embed-text"
 
 # LLM used for short summaries and final answers
-OLLAMA_SUMMARY_MODEL = os.getenv("OLLAMA_SUMMARY_MODEL", "phi3:medium")
-OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "120"))
+OLLAMA_SUMMARY_MODEL = "phi3:medium"
+OLLAMA_TIMEOUT = 120
 
 # Answering behavior
-MAX_DOCS = int(os.getenv("MAX_DOCS", "3"))
-MAX_CHARS_PER_DOC = int(os.getenv("MAX_CHARS_PER_DOC", "800"))
-STOP_SENTINEL = os.getenv("STOP_SENTINEL", "<END>")
-MAX_PREDICT = int(os.getenv("MAX_PREDICT", "96"))
-ANSWER_ECHO_ONLY = os.getenv("ANSWER_ECHO_ONLY", "0") == "1"  # debug mode to echo context
-MAX_UTTER_SEC = float(os.getenv("MAX_UTTER_SEC", "12.0"))     # hard cap per utterance
+MAX_DOCS = 3
+MAX_CHARS_PER_DOC = 800
+STOP_SENTINEL = "<END>"
+MAX_PREDICT = 96
+ANSWER_ECHO_ONLY = "0" == "1"  # debug mode to echo context
+MAX_UTTER_SEC = 15.0  # hard cap per utterance
 
 # Rolling summarizer behavior
-SUMMARY_MIN_FLUSH_CHARS = int(os.getenv("SUMMARY_MIN_FLUSH_CHARS", "80"))
-SUMMARY_FORCE_FLUSH_AFTER_FINAL = os.getenv("SUMMARY_FORCE_FLUSH_AFTER_FINAL", "1") == "1"
-SUMMARY_DRAIN_TIMEOUT = float(os.getenv("SUMMARY_DRAIN_TIMEOUT", "5.0"))
-SESSION_IDLE_SEC = float(os.getenv("SESSION_IDLE_SEC", "8.0"))  # WS auto-close after idle
+SUMMARY_MIN_FLUSH_CHARS = 80
+SUMMARY_FORCE_FLUSH_AFTER_FINAL = "1" == "1"
+SUMMARY_DRAIN_TIMEOUT = 5.0
+SESSION_IDLE_SEC = 8.0  # WS auto-close after idle
 
 # =====================================================================
 # SHARED CLIENTS (Whisper, VAD)
@@ -79,7 +79,7 @@ print("[Init] Loading Whisper model…")
 # Whisper ASR instance reused across requests to avoid cold start penalties
 whisper = WhisperModel(WHISPER_MODEL, device=WHISPER_DEVICE, compute_type=WHISPER_COMPUTE)
 # WebRTC VAD for simple voice activity detection on 20 ms frames
-vad = webrtcvad.Vad(2)  # 0..3, higher = more aggressive speech detection
+vad = webrtcvad.Vad(2)
 
 # =====================================================================
 # EMBEDDINGS (Ollama) — tolerant to Chroma EF API changes
@@ -199,11 +199,11 @@ def get_collection_for_campaign(campaign_id: str | None) -> Any:
         path = _db_path_for_campaign(campaign_id)
         os.makedirs(path, exist_ok=True)
         client = chromadb.PersistentClient(path=path, settings=Settings(anonymized_telemetry=False))
-        coll = client.get_or_create_collection(name="docs", embedding_function=ef)
+        coll = client.get_or_create_collection(name=COLLECTION_NAME, embedding_function=ef)
 
         _chroma_clients[key] = client
         _collections[key] = coll
-        print(f"[Chroma] ready at {path}, collection=docs (campaign={campaign_id or 'default'})")
+        print(f"[Chroma] ready at {path}, collection={COLLECTION_NAME} (campaign={campaign_id or 'default'})")
         return coll
 
 def ping_collection(campaign_id: str | None) -> None:
@@ -332,7 +332,13 @@ def is_speech_int16(pcm16: np.ndarray) -> bool:
     Returns True if VAD detects speech on this frame.
     """
     try:
-        return vad.is_speech(pcm16.tobytes(), SAMPLE_RATE)
+        # Ensure multiples of 20 ms for WebRTC VAD (at 16 kHz -> 320 samples)
+        frame = 320
+        n = (pcm16.size // frame) * frame
+        if n <= 0:
+            return False
+        buf = pcm16[:n].reshape(-1, frame)
+        return any(vad.is_speech(chunk.tobytes(), SAMPLE_RATE) for chunk in buf)
     except Exception:
         # Fail open to avoid breaking the stream on occasional errors
         return False
@@ -363,23 +369,28 @@ def summarize_with_ollama(text: str, model: str = OLLAMA_SUMMARY_MODEL) -> str:
 
     # The prompt keeps the model faithful to the transcript and allows SKIP output
     prompt = (
-        "You are a STRICT extractor for tabletop role-playing game (TTRPG) session notes.\n"
-
-        "MODE: VERBATIM-ONLY RECAP\n"
-        "- Use ONLY facts explicitly present in the transcript.\n"
-        "- Never invent names, items, quests, places, mechanics, or outcomes.\n"
-        "- If something is unclear or missing, omit it.\n"
-
-        "TASK:\n"
-        "1) Summarize ONLY in-game narrative and mechanics (focus on the following if stated: plot beats, explicit NPC names/roles, locations actually visited, items gained/lost, important player decisions and their consequences, hooks/next steps that were said).\n"
-        "2) IGNORE all table chat / out-of-character chatter: jokes, small talk, rules discussion, logistics, meta-commentary.\n"
-        "3) DO NOT invent names, places, items, or facts not present in the transcript.\n"
-        "4) Do not add any storey telling colour to the summary"
-        "5) If the chunk contains ONLY table chat or no game content, output exactly: SKIP.\n"
-        "6) Output:\n"
-        "   - First line: the title only (3 -5 words, no prefix).\n"
-        "   - Next 2-5 sentences: strictly derived from the chunk.\n"
-        "   - Nothing else.\n\n"
+        "You are a STRICT extractor for TTRPG session notes.\n"
+        "\n"
+        "HARD RULES:\n"
+        "• Use ONLY facts explicitly stated in the transcript; if unsure, omit.\n"
+        "• Do NOT invent, rename, or alter entities (names, items, places). Spell them EXACTLY as written.\n"
+        "• Ignore out-of-character chat (jokes, logistics, rules talk).\n"
+        "• Do NOT mention dice, numbers, or mechanics details at all "
+        "(no rolls, modifiers, totals, DCs, 'natural one', advantage/disadvantage). "
+        "Summarize outcomes qualitatively only (e.g., “the perception check succeeds”).\n"
+        "• Do NOT add meta commentary such as “no further details provided”, “unclear”, or similar filler. "
+        "If details are missing, simply omit them.\n"
+        "• No storytelling color; keep to factual recap.\n"
+        "\n"
+        "OUTPUT (exactly one section):\n"
+        "Write a single two-part section with this format ONLY:\n"
+        "A short 3-5-word title in Title Case (no prefixes, numbering, or labels).\n"
+        "One or two plain sentences strictly derived from the transcript.\n"
+        "Do not include bullets, lists, or any extra prefixes/labels. "
+        "Do NOT write the words 'Heading', 'Body', or 'Transcript chunk' anywhere.\n"
+        "Do NOT repeat or quote the transcript and NEVER write the literal phrase 'Transcript chunk:'.\n"
+        "If the chunk is only out-of-character or has no in-game content, output exactly: SKIP\n"
+        "\n"
         f"Transcript chunk:\n{text}\n"
     )
 
@@ -389,6 +400,13 @@ def summarize_with_ollama(text: str, model: str = OLLAMA_SUMMARY_MODEL) -> str:
         "stream": False,
         "keep_alive": "1h",
         "options": {"temperature": 0.0},
+        "stop": [
+            "\nTranscript chunk:", "Transcript chunk:",
+            "\nTranscript:", "Transcript:",
+            "\nContext:", "Context:",
+            "\nSource:", "Source:",
+            "\nInput:", "Input:"
+        ]
     }
 
     max_retries = int(os.getenv("SUMMARY_MAX_RETRIES", "2"))
@@ -455,7 +473,7 @@ class RollingSummarizer:
             return 0
         chunk = s[:hard_len]
         tail = chunk[-40:]
-        for p in ("。", "!", "?", ".", "!", "?"):
+        for p in ("。", "!", "?", "."):
             i = tail.rfind(p)
             if i != -1:
                 return (hard_len - len(tail)) + i + 1
@@ -568,7 +586,7 @@ def health(campaign_id: Optional[str] = None):
         "models": {"whisper": WHISPER_MODEL, "embed": EMBED_MODEL, "gen": OLLAMA_SUMMARY_MODEL},
         "db": {
             "path": _db_path_for_campaign(campaign_id),
-            "collection": "docs",
+            "collection": COLLECTION_NAME,
             "campaign": campaign_id,
             "count": coll.count(),
         },
@@ -819,6 +837,47 @@ async def _background_summary_task(send_queue: asyncio.Queue, seg: str):
         raw = await summarize_async(seg)
         out = (raw or "").strip()
 
+        # --- Strip any echoed transcript/context labels & anything after them ---
+        m = re.search(r'(?im)^\s*(Transcript(?:\s+chunk)?|Context|Source|Input)\s*:', out)
+        if m:
+            out = out[:m.start()].strip()
+
+        # Remove explicit "Heading"/"Body" labels if the model sneaks them in
+        lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
+        if lines:
+            # Clean heading line
+            heading = re.sub(r'^(?:Title|Heading|Body)\s*[—:\-]\s*', '', lines[0], flags=re.IGNORECASE)
+            heading = re.sub(r'^(?:[-*•]\s*|\d+[.)]\s*)', '', heading).strip()
+            # Build body from the rest, also stripping labels
+            body = " ".join(re.sub(r'^(?:Heading|Body)\s*[—:\-]\s*', '', ln, flags=re.IGNORECASE) for ln in lines[1:])
+            # Keep at most 2 sentences in body
+            body_sents = re.split(r'(?<=[.!?])\s+', body) if body else []
+            body_sents = [s for s in body_sents if s]
+            body = " ".join(body_sents[:2]).strip()
+            out = "\n".join([heading] + ([body] if body else [])).strip()
+
+        # Remove any stray dice/mechanics or meta-commentary the model might emit
+        _ban = re.compile(
+            r"(?:\bDC\s*\d+\b|\b\d+\s*\+\s*\d+\b|\bnat(?:ural)?\s*1\b|\bnat(?:ural)?\s*20\b|"
+            r"\broll(?:ed)?\b|\bdice\b|\bmodifier\b|\badvantage\b|\bdisadvantage\b)",
+            flags=re.IGNORECASE,
+        )
+        _meta = re.compile(
+            r"(?:no (?:further )?details (?:are )?provided|not specified|unclear|insufficient information|"
+            r"the narrative does not provide|the text does not mention)",
+            flags=re.IGNORECASE,
+        )
+        # Split by lines; keep headings + sentences that are clean
+        cleaned_lines = []
+        for ln in out.splitlines():
+            s = ln.strip()
+            if not s:
+                continue
+            if _ban.search(s) or _meta.search(s):
+                continue
+            cleaned_lines.append(s)
+        out = "\n".join(cleaned_lines)
+
         # Detect SKIP early to avoid emitting empty summaries
         first_line = ""
         for ln in out.splitlines():
@@ -831,15 +890,15 @@ async def _background_summary_task(send_queue: asyncio.Queue, seg: str):
 
         # Parse a compact title + body from the model output
         lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
-        title = "Summary"; text_lines = []
+        title = "Summary"
+        text_lines: list[str] = []
         if lines:
-            m = re.match(r'^Title\s*:\s*(.+)$', lines[0], flags=re.IGNORECASE)
-            if m:
-                title = m.group(1).strip(); text_lines = lines[1:]
-            else:
-                first = re.sub(r'^(?:[-*•]\s*|\d+[.)]\s*)', '', lines[0]).strip()
-                if first: title = first
-                text_lines = lines[1:]
+            # Strip accidental prefixes on the first line ("Title:", bullets, numbering)
+            first = re.sub(r'^(?:Title\s*:)?\s*', '', lines[0], flags=re.IGNORECASE)
+            first = re.sub(r'^(?:[-*•]\s*|\d+[.)]\s*)', '', first).strip()
+            if first:
+                title = first
+            text_lines = lines[1:]
 
         cleaned = [re.sub(r'^(?:[-*•]\s*|\d+[.)]\s*)', '', ln).strip() for ln in text_lines]
         text = "\n".join([ln for ln in cleaned if ln]) or title
