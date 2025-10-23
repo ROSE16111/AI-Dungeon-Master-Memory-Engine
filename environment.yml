@@ -1,4 +1,4 @@
-name: testy1
+name: dungeon-scribe
 channels:
   - conda-forge
   - defaults
