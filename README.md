@@ -155,7 +155,7 @@ Ollama provides local LLMs for summarization.
 1. Download → https://ollama.com/download
 2. Install two models:
    ```bash
-   ollama pull phi3
+   ollama pull phi3:medium
    ollama pull nomic-embed-text
    ```
 3. Check:

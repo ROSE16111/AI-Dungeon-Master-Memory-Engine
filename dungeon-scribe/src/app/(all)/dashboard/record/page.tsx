@@ -797,7 +797,7 @@ function SessionsInsidePaper({
 }) {
   const { summary } = useTranscript();
 
-  const raw = summary || `No content yet \n The AI summariser may get things wrong, always check the output.`;
+  const raw = summary || `INSTRUCTIONS \n Your summary will appear here. \n Click End Session to edit and save your session. \n The AI summariser may get things wrong, always check the output.`;
 
 // Parse into an array of {title, body}; can later be replaced with data from an API response
   type Block = { title: string; body: string };
