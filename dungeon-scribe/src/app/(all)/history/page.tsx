@@ -50,80 +50,24 @@ type Story = {
 
 /* *****======== Component 1： Filter==== ******/
 function HistoryFilter({
-  value,
-  onChange,
+  value,      // keep props to avoid touching callers
+  onChange,   // (unused)
 }: {
   value: "all" | "completed";
   onChange: (v: "all" | "completed") => void;
 }) {
-  const [open, setOpen] = useState(false); // Dropdown menu
-  const ref = useRef<HTMLDivElement>(null); // Click position,must be inside
-  // Listen to global click events: if the click area is outside this component, close the dropdown
-  useEffect(() => {
-    const onDoc = (e: MouseEvent) => {
-      if (!ref.current) return;
-      if (!ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, []);
-  //========= 1.2 Switch based on value ALL HISTORY / COMPLETED
-  const label = value === "all" ? "ALL HISTORY" : "COMPLETED";
+  // Fixed label, no dropdown anymore
+  const label = "ALL HISTORY";
 
   return (
-    <div
-      ref={ref}
-      className="relative flex items-center justify-center mt-6 mb-4"
-    >
-      {/* Display the current filter label */}
+    <div className="relative flex items-center justify-center mt-6 mb-4">
       <h1
         className="text-white font-bold text-3xl sm:text-4xl md:text-[50px] leading-tight"
         style={{ fontFamily: '"Cinzel", serif' }}
       >
         {label}
       </h1>
-      {/* Dropdown toggle button */}
-      <button
-        aria-label="Toggle"
-        onClick={() => setOpen((s) => !s)}
-        className="ml-3 h-7 w-7 grid place-items-center rounded-md hover:bg-white/10 transition cursor-pointer"
-      >
-        {/* Down arrow icon */}
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-          <path
-            d="M7 10l5 5 5-5"
-            stroke="white"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      </button>
-      {/* ======= 1.2.1 Dropdown menu content: show when open is true */}
-      {open && (
-        <div className="absolute top-full mt-3 z-50 min-w-[160px] rounded-md border border-white/20 bg-black/70 backdrop-blur shadow-lg text-white">
-          {/* Menu item 1: show all history */}
-          <MenuItem
-            active={value === "all"}
-            onClick={() => {
-              onChange("all");
-              setOpen(false);
-            }}
-          >
-            All History
-          </MenuItem>
-          {/* Menu item 2: show only completed history */}
-          <MenuItem
-            active={value === "completed"}
-            onClick={() => {
-              onChange("completed");
-              setOpen(false);
-            }}
-          >
-            Completed
-          </MenuItem>
-        </div>
-      )}
+      {/* dropdown removed */}
     </div>
   );
 }
@@ -502,6 +446,8 @@ export default function HistoryPage() {
     page * PAGE_SIZE,
     page * PAGE_SIZE + PAGE_SIZE
   );
+  // Empty state when current campaign has no summaries
+  const isEmpty = filtered.length === 0;
 
   // ====== 5.3 When clicking Continue/Summary on card, show confirm modal first
   const handleAction = (story: Story, type: "continue" | "summary") => {
@@ -640,12 +586,39 @@ export default function HistoryPage() {
         <HistoryFilter value={activeTab} onChange={setActiveTab} />
 
         {/* Card grid + Pagination navigation */}
+        {/* Responsive grid: 3 columns, center aligned, 24px gap between cards */}
         <div className="flex-1 w-full flex flex-col items-center justify-start relative mt-7">
           <div
             className="w-full flex items-start justify-center"
             style={{ marginTop: GRID_OFFSET, marginBottom: 24 }}
           >
-            {/* Responsive grid: 3 columns, center aligned, 24px gap between cards */}
+                {isEmpty ? (
+            // ======= Empty state card =======
+            <div className="w-full max-w-[720px]">
+              <div className="rounded-2xl bg-white/85 text-black shadow-xl px-8 py-10 text-center">
+                <div
+                  className="text-xl font-semibold"
+                  style={{ fontFamily: '"Inter", sans-serif' }}
+                >
+                  There is no summary for this campaign.
+                </div>
+                <div
+                  className="mt-2 text-[15px] text-neutral-700"
+                  style={{ fontFamily: '"Inter", sans-serif' }}
+                >
+                  start your{" "}
+                  <a
+                    href="/dashboard"
+                    className="underline underline-offset-4 decoration-2 hover:text-[#A43718] transition-colors"
+                  >
+                    adventure
+                  </a>
+                  .
+                </div>
+              </div>
+            </div>
+          ) : (
+           
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 justify-items-center">
               {current.map((s) => (
                 <CardDisplay
@@ -657,7 +630,7 @@ export default function HistoryPage() {
                 />
               ))}
             </div>
-          </div>
+          )}</div>
 
           {/* Pagination arrows */}
           {totalPages > 1 && (
