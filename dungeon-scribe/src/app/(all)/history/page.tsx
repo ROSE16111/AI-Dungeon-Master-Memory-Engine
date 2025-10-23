@@ -309,32 +309,45 @@ export default function HistoryPage() {
   useEffect(() => {
     (async () => {
       try {
-        // Determine current campaign id (prefer localStorage)
-        let currentCampaignId: string | null = null;
-        if (typeof window !== "undefined") {
-          currentCampaignId = localStorage.getItem("currentCampaignId");
-        }
-        if (!currentCampaignId) {
-          try {
-            const r = await fetch("/api/current-campaign");
-            if (r.ok) {
-              const j = await r.json();
-              currentCampaignId = j?.id || null;
-            }
-          } catch {}
-        }
-
-        if (!currentCampaignId) {
-          // No campaign selected: clear stories
-          setStories([]);
-          return;
-        }
-
+        // First, fetch all campaigns
         const res = await fetch("/api/data");
         const data = await res.json();
         const campaigns = data.campaigns || [];
 
-        const camp = campaigns.find((c: any) => c.id === currentCampaignId);
+        // If no campaigns exist, show empty
+        if (campaigns.length === 0) {
+          setStories([]);
+          return;
+        }
+
+        // Step 1: Try to get the real current campaign from the API (most authoritative)
+        let currentCampaignId: string | null = null;
+        try {
+          const r = await fetch("/api/current-campaign");
+          if (r.ok) {
+            const j = await r.json();
+            currentCampaignId = j?.item?.id || j?.id || null;
+          }
+        } catch {}
+
+        // Step 2: If API didn't return a campaign, check localStorage
+        if (!currentCampaignId && typeof window !== "undefined") {
+          currentCampaignId = localStorage.getItem("currentCampaignId");
+        }
+
+        // Step 3: Validate that the campaign ID actually exists in the database
+        let camp = currentCampaignId 
+          ? campaigns.find((c: any) => c.id === currentCampaignId) 
+          : null;
+        
+        // Step 4: If validation failed, clear the invalid data but don't auto-select
+        if (!camp && currentCampaignId) {
+          console.warn(`Campaign ${currentCampaignId} not found in database. Please select a valid campaign.`);
+          if (typeof window !== "undefined") {
+            localStorage.removeItem("currentCampaignId");
+          }
+        }
+        
         if (!camp) {
           setStories([]);
           return;

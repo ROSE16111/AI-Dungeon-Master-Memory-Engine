@@ -2050,33 +2050,9 @@ export default function RecordPage() {
     const fetchRoles = async () => {
       try {
         setCharLoading(true);
-        console.log("Getting current campaign from cookie...");
+        console.log("Getting campaigns and validating current campaign...");
 
-        // First, get the current campaign from cookie
-        const currentCampaignRes = await fetch("/api/current-campaign");
-        if (!currentCampaignRes.ok) {
-          throw new Error("Failed to get current campaign");
-        }
-
-        const currentCampaignData = await currentCampaignRes.json();
-        console.log("Current campaign from cookie:", currentCampaignData);
-
-        if (!currentCampaignData.id) {
-          console.log("No current campaign set");
-          setCharItems([
-            {
-              name: "No Campaign Selected",
-              img: "/Griff.png",
-              details:
-                "No campaign selected. Please go to login and select a campaign first!",
-            },
-          ]);
-          return;
-        }
-
-        setCurrentCampaignId(currentCampaignData.id);
-
-        // Now get all campaigns with their roles to find the current one
+        // Step 1: Fetch all campaigns first
         const res = await fetch("/api/data");
         if (!res.ok) {
           throw new Error(`HTTP error! status: ${res.status}`);
@@ -2097,21 +2073,46 @@ export default function RecordPage() {
           return;
         }
 
-        // Find the current campaign by ID
-        const currentCampaign = data.campaigns.find(
-          (c: any) => c.id === currentCampaignData.id
-        );
+        // Step 2: Get current campaign ID (prefer API, then localStorage)
+        let currentCampaignId: string | null = null;
+        try {
+          const currentCampaignRes = await fetch("/api/current-campaign");
+          if (currentCampaignRes.ok) {
+            const currentCampaignData = await currentCampaignRes.json();
+            currentCampaignId = currentCampaignData?.item?.id || currentCampaignData?.id || null;
+          }
+        } catch {}
+
+        if (!currentCampaignId && typeof window !== "undefined") {
+          currentCampaignId = localStorage.getItem("currentCampaignId");
+        }
+
+        // Step 3: Validate the campaign ID exists in the database
+        const currentCampaign = currentCampaignId
+          ? data.campaigns.find((c: any) => c.id === currentCampaignId)
+          : null;
+
+        // Step 4: If invalid campaign ID, clear it and show error
+        if (!currentCampaign && currentCampaignId) {
+          console.warn(`Campaign ${currentCampaignId} not found in database. Please select a valid campaign.`);
+          if (typeof window !== "undefined") {
+            localStorage.removeItem("currentCampaignId");
+          }
+        }
+
         if (!currentCampaign) {
-          console.log("Current campaign not found in database");
+          console.log("No valid campaign selected");
           setCharItems([
             {
-              name: "Campaign Not Found",
+              name: "No Campaign Selected",
               img: "/Griff.png",
-              details: `Campaign with ID "${currentCampaignData.id}" not found. Please select a valid campaign.`,
+              details: "No campaign selected. Please go to login and select a campaign first!",
             },
           ]);
           return;
         }
+
+        setCurrentCampaignId(currentCampaign.id);
 
         console.log(
           "Using campaign:",

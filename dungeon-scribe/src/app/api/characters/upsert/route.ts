@@ -204,6 +204,31 @@ export async function POST(req: Request) {
         const name = inc.name.trim();
         if (!name) continue;
 
+        // Check if a role exists for this character in this campaign
+        const existingRole = await prisma.role.findFirst({
+            where: {
+            name: name,
+            campaignId: campaignId,
+            },
+        });
+
+        // If role doesn't exist, create it with default level 1
+        if (!existingRole) {
+            try {
+            await prisma.role.create({
+                data: {
+                name: name,
+                level: 1, // Default level for new characters
+                campaignId: campaignId,
+                },
+            });
+            console.log(`[Characters/Upsert] Created new role: ${name} for campaign ${campaignId}`);
+            } catch (roleError) {
+            console.warn(`[Characters/Upsert] Failed to create role for ${name}:`, roleError);
+            // Continue even if role creation fails
+            }
+        }
+
         const had = byName.get(name);
         const merged = had ? mergeCard(parseContentToCard(name, had.content), inc) : inc;
         const content = cardToContent(merged);

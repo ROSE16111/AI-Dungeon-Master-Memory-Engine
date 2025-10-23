@@ -138,12 +138,15 @@ export async function analyzeText(body: AnalyzeArgs) {
         });
     }
 
-    // --- Create character summary rows (unchanged logic) ---
+    // --- Create character summary rows and ensure roles exist ---
     const createdCharacterSummaries: Array<{ id: string; name: string }> = [];
     for (const card of characters) {
         try {
+        const characterName = (card as any).name?.trim();
+        if (!characterName) continue; // Skip if no name
+
         const block = blocksFromCard({
-            name: (card as any).name,
+            name: characterName,
             role: (card as any).role,
             affiliation: (card as any).affiliation,
             traits: (card as any).traits ?? [],
@@ -153,17 +156,44 @@ export async function analyzeText(body: AnalyzeArgs) {
             notes: (card as any).notes,
         });
 
+        // Check if a role with this character name already exists in this campaign
+        const existingRole = await prisma.role.findFirst({
+            where: {
+            name: characterName,
+            campaignId: campaign.id,
+            },
+        });
+
+        // If role doesn't exist, create it with default level 1
+        if (!existingRole) {
+            try {
+            await prisma.role.create({
+                data: {
+                name: characterName,
+                level: 1, // Default level for new characters
+                campaignId: campaign.id,
+                },
+            });
+            console.log(`[Analyze] Created new role: ${characterName} for campaign ${campaign.id}`);
+            } catch (roleError) {
+            console.warn(`[Analyze] Failed to create role for ${characterName}:`, roleError);
+            // Continue even if role creation fails
+            }
+        }
+
+        // Create the character summary
         const row = await prisma.summary.create({
             data: {
             type: SummaryType.character,
-            roleName: (card as any).name,
+            roleName: characterName,
             content: block,
             campaignId: campaign.id,
             },
         });
-        createdCharacterSummaries.push({ id: row.id, name: (card as any).name });
-        } catch {
+        createdCharacterSummaries.push({ id: row.id, name: characterName });
+        } catch (error) {
         // tolerate per-row failures
+        console.warn('[Analyze] Failed to process character card:', error);
         }
     }
 
