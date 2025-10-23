@@ -450,7 +450,7 @@ export default function DashboardPage() {
             style={{ fontFamily: '"Roboto", sans-serif' }}
             onClick={() => setOpenUpload(true)}
           >
-            Upload Audio
+            Upload
           </button>
         </div>
       </main>
@@ -462,7 +462,7 @@ export default function DashboardPage() {
                    drop-shadow-[0_2px_3px_rgba(0,0,0,0.6)] select-none"
         style={{ fontFamily: '"Cinzel Decorative", serif' }}
       >
-        Welcome back,
+        Welcome back to
         <br />
         <span className="italic">{campaignTitle ?? "your next adventure"}</span>
       </div>
