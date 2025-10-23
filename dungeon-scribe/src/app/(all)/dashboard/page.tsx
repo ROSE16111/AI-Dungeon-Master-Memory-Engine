@@ -450,7 +450,7 @@ export default function DashboardPage() {
             style={{ fontFamily: '"Roboto", sans-serif' }}
             onClick={() => setOpenUpload(true)}
           >
-            Upload Audio
+            Upload
           </button>
         </div>
       </main>
