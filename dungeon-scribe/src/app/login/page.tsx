@@ -123,6 +123,8 @@ type SearchableSelectProps = {
   options: string[];
   placeholder?: string;
   disabled?: boolean;
+  allowEmpty?: boolean;
+  emptyLabel?: string; // default "(No role)"
 };
 
 function SearchableSelect({
@@ -131,6 +133,8 @@ function SearchableSelect({
   options,
   placeholder = "Type to search...",
   disabled,
+  allowEmpty,
+  emptyLabel = "(No role)",
 }: SearchableSelectProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -181,6 +185,22 @@ function SearchableSelect({
           />
           <CommandList className="max-h-80 overflow-auto">
             <CommandEmpty>No results</CommandEmpty>
+            {allowEmpty && (
+            <CommandItem
+              value="__none__"
+              onSelect={() => {
+                onChange("");    // ← 设为空字符串
+                setOpen(false);
+                setQuery("");
+              }}
+              className="truncate"
+            >
+              {/* 左侧对勾：当前 value 为空则高亮 */}
+              <Check className={cn("mr-2 h-4 w-4", value ? "opacity-0" : "opacity-100")} />
+              <span className="truncate">{emptyLabel}</span>
+            </CommandItem>
+          )}
+
             <CommandGroup>
               {filtered.map((opt) => {
                 const selected = value === opt;
@@ -337,7 +357,7 @@ export default function LoginPage() {
               } catch {}
             } else {
               // Optional: if no role chosen this time, you may clear previous memory
-              // try { localStorage.removeItem(`preferredRole:${item.id}`) } catch {}
+               try { localStorage.removeItem(`preferredRole:${item.id}`) } catch {}
             }
           }
         }
@@ -431,6 +451,8 @@ export default function LoginPage() {
                     options={roles}
                     placeholder="Enter your role name"
                     disabled={!campaign}
+                    allowEmpty
+                    emptyLabel="(No role)"
                   />
                 </div>
 
