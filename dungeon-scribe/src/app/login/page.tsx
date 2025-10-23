@@ -13,6 +13,18 @@ import {
   SelectItem,
   SelectValue,
 } from "@/components/ui/select";
+//for the combobox
+import { cn } from "@/lib/utils";
+import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
+import {
+  Command,
+  CommandInput,
+  CommandList,
+  CommandEmpty,
+  CommandGroup,
+  CommandItem,
+} from "@/components/ui/command";
+import { ChevronsUpDown, Check } from "lucide-react";
 
 import {
   Dialog,
@@ -103,6 +115,101 @@ function CreateModal({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+type SearchableSelectProps = {
+  value?: string;
+  onChange: (v: string) => void;
+  options: string[];
+  placeholder?: string;
+  disabled?: boolean;
+};
+
+function SearchableSelect({
+  value,
+  onChange,
+  options,
+  placeholder = "Type to search...",
+  disabled,
+}: SearchableSelectProps) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+
+  // local filtering (case-insensitive). For very large lists, you can debounce here.
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return q ? options.filter((o) => o.toLowerCase().includes(q)) : options;
+  }, [options, query]);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      {/* Trigger looks like SelectTrigger */}
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          disabled={disabled}
+          className={cn(
+            "w-full h-10 rounded-md border border-input bg-white/95 px-3 text-left text-black",
+            "flex items-center justify-between gap-2",
+            disabled && "opacity-60 cursor-not-allowed"
+          )}
+          aria-haspopup="listbox"
+        >
+          <span className={cn("truncate", !value && "text-neutral-500")}>
+            {value || placeholder}
+          </span>
+          <ChevronsUpDown className="h-4 w-4 opacity-60" />
+        </button>
+      </PopoverTrigger>
+
+      {/* The dropdown; width matches trigger; max height prevents overflow */}
+      <PopoverContent
+        side="bottom"
+        align="start"
+        sideOffset={6}
+        collisionPadding={8}
+        // width：clamp to a comfortable range
+        className="p-0 w-[min(650px,calc(100vw-2rem))]"
+      >
+        <Command shouldFilter={false}>
+          {/* Typing here filters the list below */}
+          <CommandInput
+            autoFocus
+            placeholder={placeholder}
+            value={query}
+            onValueChange={setQuery}
+          />
+          <CommandList className="max-h-80 overflow-auto">
+            <CommandEmpty>No results</CommandEmpty>
+            <CommandGroup>
+              {filtered.map((opt) => {
+                const selected = value === opt;
+                return (
+                  <CommandItem
+                    key={opt}
+                    value={opt}
+                    onSelect={() => {
+                      onChange(opt);
+                      setOpen(false);
+                      setQuery("");
+                    }}
+                    className="truncate"
+                  >
+                    <Check
+                      className={cn(
+                        "mr-2 h-4 w-4",
+                        selected ? "opacity-100" : "opacity-0"
+                      )}
+                    />
+                    <span className="truncate">{opt}</span>
+                  </CommandItem>
+                );
+              })}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -275,18 +382,12 @@ export default function LoginPage() {
               </Label>
               <div className="flex items-center gap-2">
                 <div className="flex-1">
-                  <Select value={campaign} onValueChange={setCampaign}>
-                    <SelectTrigger className="bg-white/95 text-black">
-                      <SelectValue placeholder="Enter your campaign name" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {campaigns.map((c) => (
-                        <SelectItem key={c} value={c}>
-                          {c}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <SearchableSelect
+                    value={campaign}
+                    onChange={setCampaign}
+                    options={campaigns}
+                    placeholder="Enter your campaign name"
+                  />
                 </div>
 
                 {/* Create Campaign */}
@@ -324,22 +425,13 @@ export default function LoginPage() {
               </Label>
               <div className="flex items-center gap-2">
                 <div className="flex-1">
-                  <Select
+                  <SearchableSelect
                     value={role}
-                    onValueChange={setRole}
+                    onChange={setRole}
+                    options={roles}
+                    placeholder="Enter your role name"
                     disabled={!campaign}
-                  >
-                    <SelectTrigger className="bg-white/95 text-black">
-                      <SelectValue placeholder="Enter your role name" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {roles.map((r) => (
-                        <SelectItem key={r} value={r}>
-                          {r}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  />
                 </div>
 
                 {/* Create Role */}

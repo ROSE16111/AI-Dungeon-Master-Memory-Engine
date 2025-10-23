@@ -8,7 +8,7 @@
   安装 Node 15.5.3（建议 nvm + Node 20）、建立数据库： npm i、npx prisma generate、npx prisma migrate dev
 - to exist: Ctrl + C
 - framework: React+Tailwind+shadcn/ui
-- components:`npx shadcn@latest add avatar separator button card input label tabs dialog textarea sheet`
+- components:`npx shadcn@latest add avatar separator button card input label tabs dialog textarea sheet popover command`
 - icon lib: lucide-react
 - ollama: https://ollama.com
 - analyse: `npm i mammoth pdf-parse`
