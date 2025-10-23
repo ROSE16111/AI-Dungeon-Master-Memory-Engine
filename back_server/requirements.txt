@@ -1,5 +1,0 @@
-asyncio
-websockets
-numpy
-webrtcvad
-faster-whisper
