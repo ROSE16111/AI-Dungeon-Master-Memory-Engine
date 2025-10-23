@@ -797,7 +797,7 @@ function SessionsInsidePaper({
 }) {
   const { summary } = useTranscript();
 
-  const raw = summary || `Not content yet`;
+  const raw = summary || `No content yet \n The AI summariser may get things wrong, always check the output.`;
 
 // Parse into an array of {title, body}; can later be replaced with data from an API response
   type Block = { title: string; body: string };
@@ -1234,6 +1234,11 @@ function ChatWidget() {
                   <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_0_3px_rgba(16,185,129,.25)]"></span>
                   {busy ? "Thinking…" : "Online"}
                 </div>
+                    {/* compact disclaimer */}
+                  <div className="mt-1 text-[11px] text-white/90 flex items-center gap-1">
+                    <span aria-hidden>⚠️</span>
+                    <span className="truncate">AI may be wrong. Verify important details.</span>
+                  </div>
               </div>
             </div>
             <button

@@ -1,62 +1,39 @@
-"""
-Dungeon Scribe Backend — FastAPI service for live ASR, RAG, and rolling summaries.
-
-This module provides:
-- A WebSocket endpoint for streaming 16 kHz PCM audio, VAD-gated buffering,
-    partial + final transcription via faster-whisper, immediate vector ingestion
-    (ChromaDB), and background LLM-powered summarization.
-- REST endpoints to ingest/query/answer against a per-campaign vector store.
-- A file-upload transcription endpoint.
-- Lightweight health/admin endpoints for diagnostics and maintenance.
-"""
-
-# =====================================================================
-# Imports
-# =====================================================================
-import asyncio
-import contextlib
-import json
 import os
 import re
-import shutil
-import tempfile
+import json
 import time
+import tempfile
+import shutil
+import contextlib
+import asyncio
 from contextlib import asynccontextmanager
-from threading import RLock
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import List, Optional, Dict, Any, Union, Callable
 
-import chromadb
 import numpy as np
 import requests
-import uvicorn
-import webrtcvad
+import chromadb
 from chromadb.config import Settings
-from fastapi import (
-    FastAPI,
-    File,
-    HTTPException,
-    UploadFile,
-    WebSocket,
-    WebSocketDisconnect,
-)
-from fastapi.middleware.cors import CORSMiddleware
+import webrtcvad
 from faster_whisper import WhisperModel
+from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import uvicorn
 from starlette.websockets import WebSocketState
 
 # =====================================================================
 # SETTINGS
 # =====================================================================
-# Allow MKL/OpenMP to load even if duplicates are detected on some platforms.
-os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-# Avoid symlink use in HF cache (helps on some filesystems).
+# Allow MKL/OpenMP to load even if duplicates are detected on some platforms
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+# Avoid symlink use in HF cache (helps on some filesystems)
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS", "1")
 
 # Core audio and streaming knobs
-SAMPLE_RATE = 16000  # VAD and Whisper expect 16 kHz PCM
-SILENCE_END_MS = 800  # Silence threshold to finalize an utterance (ms)
-PARTIAL_INTERVAL = 0.9  # Seconds between partial ASR updates
-OVERLAP_SEC = 0.2  # Overlap for partial decoding context (seconds)
+SAMPLE_RATE = 16000                  # VAD and Whisper expect 16 kHz PCM
+SILENCE_END_MS = 800                 # Silence threshold to finalize an utterance
+PARTIAL_INTERVAL = 0.9               # Seconds between partial ASR updates
+OVERLAP_SEC = 0.2                    # Overlap for partial decoding context
 
 # Summarization chunk sizing
 SUMMARY_CHUNK_CHARS = 240
@@ -64,7 +41,7 @@ SUMMARY_CHUNK_CHARS = 240
 # Whisper configuration
 WHISPER_MODEL = "small"
 WHISPER_DEVICE = "cpu"
-WHISPER_COMPUTE = "int8"
+WHISPER_COMPUTE ="int8"
 LANG = "en"
 BEAM = 1
 TEMP = 0.0
@@ -86,71 +63,38 @@ MAX_DOCS = 3
 MAX_CHARS_PER_DOC = 800
 STOP_SENTINEL = "<END>"
 MAX_PREDICT = 96
-ANSWER_ECHO_ONLY = "0" == "1"  # Debug mode to echo context
-MAX_UTTER_SEC = 15.0  # Hard cap per utterance (seconds)
+ANSWER_ECHO_ONLY = "0" == "1"  # debug mode to echo context
+MAX_UTTER_SEC = 15.0  # hard cap per utterance
 
 # Rolling summarizer behavior
 SUMMARY_MIN_FLUSH_CHARS = 80
 SUMMARY_FORCE_FLUSH_AFTER_FINAL = "1" == "1"
 SUMMARY_DRAIN_TIMEOUT = 5.0
-SESSION_IDLE_SEC = 8.0  # WS auto-close after idle (seconds)
-
-# --- Optional enhancements (off by default) ---
-# Set these via environment to enable.
-USE_SILERO_VAD = os.getenv("USE_SILERO_VAD", "1") == "1"
-SILERO_VAD_THRESHOLD = float(os.getenv("SILERO_VAD_THRESHOLD", "0.5"))
-MIN_SPEECH_MS = int(os.getenv("MIN_SPEECH_MS", "300"))
-USE_NOISE_REDUCTION = os.getenv("USE_NOISE_REDUCTION", "1") == "1"
-NOISE_LEARN_FRAMES = int(os.getenv("NR_NOISE_LEARN_FRAMES", "50"))
-NOISE_REDUCE_STRENGTH = float(os.getenv("NR_STRENGTH", "0.7"))
+SESSION_IDLE_SEC = 8.0  # WS auto-close after idle
 
 # =====================================================================
 # SHARED CLIENTS (Whisper, VAD)
 # =====================================================================
 print("[Init] Loading Whisper model…")
-# Whisper ASR instance reused across requests to avoid cold start penalties.
-whisper = WhisperModel(
-    WHISPER_MODEL,
-    device=WHISPER_DEVICE,
-    compute_type=WHISPER_COMPUTE,
-)
-# WebRTC VAD for simple voice activity detection on 20 ms frames.
+# Whisper ASR instance reused across requests to avoid cold start penalties
+whisper = WhisperModel(WHISPER_MODEL, device=WHISPER_DEVICE, compute_type=WHISPER_COMPUTE)
+# WebRTC VAD for simple voice activity detection on 20 ms frames
 vad = webrtcvad.Vad(2)
-
-# Optional Silero VAD (loaded only if enabled)
-_silero_vad = None
-if USE_SILERO_VAD:
-    try:
-        import torch  # optional dependency; only import when enabled
-        print("[VAD] Loading Silero VAD…")
-        _silero_vad, _ = torch.hub.load(
-            repo_or_dir="snakers4/silero-vad",
-            model="silero_vad",
-            force_reload=False,
-            onnx=False,
-        )
-        _silero_vad.eval()
-        print("[VAD] Silero ready")
-    except Exception as e:
-        print(f"[VAD] Silero failed to load; falling back to WebRTC VAD: {e}")
-        _silero_vad = None
 
 # =====================================================================
 # EMBEDDINGS (Ollama) — tolerant to Chroma EF API changes
 # =====================================================================
+# EmbeddingFunction implementation that talks to Ollama /api/embeddings
 AllowedMeta = Union[str, int, float, bool]
 
-
 class OllamaEmbeddingFunction:
-    """EmbeddingFunction implementation that talks to Ollama /api/embeddings."""
-
     def __init__(self, base_url: str = OLLAMA_URL, model: str = EMBED_MODEL, timeout: int = 60):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout = timeout
 
     def __call__(self, input: List[str]) -> List[List[float]]:
-        # Chroma may call EF directly via __call__.
+        # Chroma may call EF directly via __call__
         texts = [input] if isinstance(input, str) else input
         return self._embed(texts)
 
@@ -158,17 +102,17 @@ class OllamaEmbeddingFunction:
         return f"ollama::{self.model}"
 
     def embed_documents(self, input: List[str], **kwargs) -> List[List[float]]:
-        # Backward-compat with EF usage in older Chroma versions.
+        # Backward-compat with EF usage in older Chroma versions
         texts = [input] if isinstance(input, str) else input
         return self._embed(texts)
 
     def embed_query(self, input: Union[str, List[str]], **kwargs) -> List[List[float]]:
-        # Some EF APIs treat query separately; we normalize to list-of-list.
+        # Some EF APIs treat query separately; we normalize to list-of-list
         text = input[0] if isinstance(input, list) else input
         return self._embed([text])
 
     def _embed(self, texts: List[str]) -> List[List[float]]:
-        # Makes one HTTP call per text to keep error boundaries simple.
+        # Makes one HTTP call per text to keep error boundaries simple
         out: List[List[float]] = []
         for t in texts:
             r = requests.post(
@@ -184,10 +128,8 @@ class OllamaEmbeddingFunction:
             out.append(emb)
         return out
 
-
-# Global EF instance shared by Chroma.
+# Global EF instance shared by Chroma
 ef = OllamaEmbeddingFunction()
-
 
 def embed_query_batched(text: str) -> List[List[float]]:
     """
@@ -197,11 +139,11 @@ def embed_query_batched(text: str) -> List[List[float]]:
     try:
         vec = ef.embed_query(input=text)
     except TypeError:
-        # Some EF versions accept positional arg.
+        # Some EF versions accept positional arg
         try:
             vec = ef.embed_query(text)
         except Exception:
-            # Last resort: call EF like a function, then raw HTTP.
+            # Last resort: call EF like a function, then raw HTTP
             try:
                 vec = ef([text])
             except Exception:
@@ -217,26 +159,25 @@ def embed_query_batched(text: str) -> List[List[float]]:
     if vec is None:
         raise RuntimeError("Failed to obtain query embedding.")
 
-    # Normalize shapes: [floats] -> [[floats]].
+    # Normalize shapes: [floats] -> [[floats]]
     if isinstance(vec, list) and vec and isinstance(vec[0], float):
         return [vec]
     if isinstance(vec, list) and vec and isinstance(vec[0], list):
         return vec
     raise RuntimeError(f"Unexpected embedding shape from EF: {type(vec)}")
 
-
 # =====================================================================
 # CHROMA
 # =====================================================================
+from threading import RLock
+
 _chroma_clients: dict[str, chromadb.PersistentClient] = {}
 _collections: dict[str, Any] = {}
 _chroma_lock = RLock()
 
-
 def _db_key_for_campaign(campaign_id: str | None) -> str:
     """Return a stable cache key for a campaign's DB path."""
     return campaign_id.strip() if campaign_id else "__default__"
-
 
 def _db_path_for_campaign(campaign_id: str | None) -> str:
     """Resolve on-disk path for a campaign's Chroma DB."""
@@ -244,7 +185,6 @@ def _db_path_for_campaign(campaign_id: str | None) -> str:
         return DB_PATH
     safe = re.sub(r"[^a-zA-Z0-9._-]+", "_", campaign_id.strip())
     return os.path.join(DB_PATH, safe)
-
 
 def get_collection_for_campaign(campaign_id: str | None) -> Any:
     """
@@ -263,11 +203,8 @@ def get_collection_for_campaign(campaign_id: str | None) -> Any:
 
         _chroma_clients[key] = client
         _collections[key] = coll
-        print(
-            f"[Chroma] ready at {path}, collection={COLLECTION_NAME} (campaign={campaign_id or 'default'})"
-        )
+        print(f"[Chroma] ready at {path}, collection={COLLECTION_NAME} (campaign={campaign_id or 'default'})")
         return coll
-
 
 def ping_collection(campaign_id: str | None) -> None:
     """Light health check; if it fails, rebuild only that campaign's client/collection."""
@@ -281,8 +218,7 @@ def ping_collection(campaign_id: str | None) -> None:
             _collections.pop(key, None)
         _ = get_collection_for_campaign(campaign_id)  # re-create
 
-
-# Eager init for default collection only (so /health etc. still work).
+# Eager init for default collection only (so /health etc. still work)
 _ = get_collection_for_campaign(None)
 
 # =====================================================================
@@ -292,17 +228,16 @@ _ = get_collection_for_campaign(None)
 async def lifespan(app: FastAPI):
     """
     App lifespan hook used to warm Ollama models for faster first request.
-    This is best-effort; startup continues even if warmup fails.
     """
     try:
-        # Warm up generate endpoint.
+        # Warm up generate endpoint
         requests.post(
             f"{OLLAMA_URL.rstrip('/')}/api/generate",
             headers={"Content-Type": "application/json"},
             json={"model": OLLAMA_SUMMARY_MODEL, "prompt": "ok", "stream": False, "keep_alive": "1h"},
             timeout=50,
         )
-        # Warm up embeddings endpoint.
+        # Warm up embeddings endpoint
         requests.post(
             f"{OLLAMA_URL.rstrip('/')}/api/embeddings",
             headers={"Content-Type": "application/json"},
@@ -311,12 +246,11 @@ async def lifespan(app: FastAPI):
         )
         print("[Warmup] Ollama models loaded")
     except Exception as e:
-        # Server should still boot if warmup fails.
+        # Server should still boot if warmup fails
         print("[Warmup] skipped:", e)
     yield
 
-
-# FastAPI app instance with permissive CORS by default.
+# FastAPI app instance with permissive CORS by default
 app = FastAPI(lifespan=lifespan)
 allowed_origins = os.getenv("CORS_ORIGINS", "*").split(",")
 app.add_middleware(
@@ -324,7 +258,7 @@ app.add_middleware(
     allow_origins=allowed_origins,
     allow_credentials=False,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["*"]
 )
 
 # =====================================================================
@@ -342,29 +276,30 @@ def focus_term(q: str) -> Optional[str]:
     caps = re.findall(r"\b[A-Z][a-zA-Z'-]{2,}\b", q)
     return max(caps, key=len).lower() if caps else None
 
-
 def first_n_sentences(t: str, n: int = 2) -> str:
-    """Return the first n sentence-like segments based on simple punctuation boundaries."""
-    parts = re.split(r"(?<=[.!?])\s+", t.strip())
-    return " ".join(parts[:n]).strip()
-
+    """
+    Return the first n sentence-like segments based on simple punctuation boundaries.
+    """
+    parts = re.split(r'(?<=[.!?])\s+', t.strip())
+    return ' '.join(parts[:n]).strip()
 
 def trim_text(s: str, n: int) -> str:
-    """Truncate long strings with an ellipsis suffix to fit display constraints."""
+    """
+    Truncate long strings with an ellipsis suffix to fit display constraints.
+    """
     s = s or ""
     return s if len(s) <= n else s[:n] + "…"
-
 
 def chunk_text(
     text: str,
     max_chars: int = int(os.getenv("CHUNK_CHARS", "800")),
-    overlap: int = int(os.getenv("CHUNK_OVERLAP", "30")),
+    overlap: int = int(os.getenv("CHUNK_OVERLAP", "30"))
 ) -> List[str]:
     """
     Split text into overlapping sentence-based chunks for embedding.
     Overlap helps maintain context across boundaries.
     """
-    sents = re.split(r"(?<=[.!?])\s+", (text or "").strip())
+    sents = re.split(r'(?<=[.!?])\s+', (text or "").strip())
     chunks, cur = [], ""
     for s in sents:
         if len(cur) + len(s) + 1 <= max_chars:
@@ -378,9 +313,10 @@ def chunk_text(
         chunks.append(cur)
     return chunks
 
-
 def clean_metadata(meta: dict | None) -> Dict[str, AllowedMeta]:
-    """Ensure metadata contains only JSON-serializable primitives required by Chroma."""
+    """
+    Ensure metadata contains only JSON-serializable primitives required by Chroma.
+    """
     out: Dict[str, AllowedMeta] = {}
     if not meta:
         return out
@@ -390,14 +326,13 @@ def clean_metadata(meta: dict | None) -> Dict[str, AllowedMeta]:
         out[k] = v if isinstance(v, (str, int, float, bool)) else str(v)
     return out
 
-
 def is_speech_int16(pcm16: np.ndarray) -> bool:
     """
     Run VAD on a 16-bit PCM audio buffer at SAMPLE_RATE.
     Returns True if VAD detects speech on this frame.
     """
     try:
-        # Ensure multiples of 20 ms for WebRTC VAD (at 16 kHz -> 320 samples).
+        # Ensure multiples of 20 ms for WebRTC VAD (at 16 kHz -> 320 samples)
         frame = 320
         n = (pcm16.size // frame) * frame
         if n <= 0:
@@ -405,9 +340,8 @@ def is_speech_int16(pcm16: np.ndarray) -> bool:
         buf = pcm16[:n].reshape(-1, frame)
         return any(vad.is_speech(chunk.tobytes(), SAMPLE_RATE) for chunk in buf)
     except Exception:
-        # Fail open to avoid breaking the stream on occasional errors.
+        # Fail open to avoid breaking the stream on occasional errors
         return False
-
 
 def transcribe_float32(wave_f32: np.ndarray) -> str:
     """
@@ -425,51 +359,6 @@ def transcribe_float32(wave_f32: np.ndarray) -> str:
     )
     return "".join(s.text for s in segs).strip()
 
-
-# -------------------- Optional enhancement helpers --------------------
-def _nr_apply_int16(pcm16: np.ndarray) -> np.ndarray:
-    """
-    Optional spectral gating using 'noisereduce'.
-    Returns int16; on any error or if disabled, returns the original buffer.
-    """
-    if not USE_NOISE_REDUCTION:
-        return pcm16
-    try:
-        import noisereduce as nr  # optional dependency; import only when used
-        audio_float = pcm16.astype(np.float32) / 32768.0
-        reduced = nr.reduce_noise(
-            y=audio_float,
-            sr=SAMPLE_RATE,
-            stationary=True,
-            prop_decrease=NOISE_REDUCE_STRENGTH,
-            freq_mask_smooth_hz=500,
-            time_mask_smooth_ms=50,
-        )
-        return np.clip(reduced * 32768.0, -32768, 32767).astype(np.int16)
-    except Exception:
-        return pcm16
-
-
-def _is_speech_silero(pcm16: np.ndarray) -> tuple[bool, float]:
-    """
-    Return (is_speech, confidence) using Silero when available; else use WebRTC VAD with 0.0 confidence.
-    """
-    if _silero_vad is None:
-        return (is_speech_int16(pcm16), 0.0)
-    try:
-        import torch  # optional dependency; import only when used
-        audio_float = pcm16.astype(np.float32) / 32768.0
-        audio_tensor = torch.from_numpy(audio_float)
-        with torch.no_grad():
-            prob = float(_silero_vad(audio_tensor, SAMPLE_RATE).item())
-        return (prob > SILERO_VAD_THRESHOLD, prob)
-    except Exception:
-        return (is_speech_int16(pcm16), 0.0)
-
-
-# =====================================================================
-# SUMMARIZATION PIPELINE
-# =====================================================================
 def summarize_with_ollama(text: str, model: str = OLLAMA_SUMMARY_MODEL) -> str:
     """
     Summarize a transcript chunk with strict extraction rules for TTRPG notes.
@@ -478,7 +367,7 @@ def summarize_with_ollama(text: str, model: str = OLLAMA_SUMMARY_MODEL) -> str:
     print(f"\n[Summary] Calling Ollama with {len(text.split())} words")
     print(f"[Summary] Input preview: {text[:150]}...\n")
 
-    # The prompt keeps the model faithful to the transcript and allows SKIP output.
+    # The prompt keeps the model faithful to the transcript and allows SKIP output
     prompt = (
         "You are a STRICT extractor for TTRPG session notes.\n"
         "\n"
@@ -512,17 +401,12 @@ def summarize_with_ollama(text: str, model: str = OLLAMA_SUMMARY_MODEL) -> str:
         "keep_alive": "1h",
         "options": {"temperature": 0.0},
         "stop": [
-            "\nTranscript chunk:",
-            "Transcript chunk:",
-            "\nTranscript:",
-            "Transcript:",
-            "\nContext:",
-            "Context:",
-            "\nSource:",
-            "Source:",
-            "\nInput:",
-            "Input:",
-        ],
+            "\nTranscript chunk:", "Transcript chunk:",
+            "\nTranscript:", "Transcript:",
+            "\nContext:", "Context:",
+            "\nSource:", "Source:",
+            "\nInput:", "Input:"
+        ]
     }
 
     max_retries = int(os.getenv("SUMMARY_MAX_RETRIES", "2"))
@@ -544,51 +428,40 @@ def summarize_with_ollama(text: str, model: str = OLLAMA_SUMMARY_MODEL) -> str:
             print(f"[Summary] Ollama response:\n{out}\n{'-'*50}")
             return out
         except requests.exceptions.Timeout:
-            # Retry timeouts with exponential backoff.
+            # Retry timeouts with exponential backoff
             if attempt < max_retries:
-                sleep_s = backoff_base * (2**attempt)
-                print(
-                    f"[Summary][retry] Timeout, retrying in {sleep_s:.2f}s (attempt {attempt+1}/{max_retries})"
-                )
+                sleep_s = backoff_base * (2 ** attempt)
+                print(f"[Summary][retry] Timeout, retrying in {sleep_s:.2f}s (attempt {attempt+1}/{max_retries})")
                 time.sleep(sleep_s)
                 continue
             return "[Error] Timeout contacting Ollama"
         except requests.exceptions.RequestException as e:
-            # Retry only connection errors; bubble up other HTTP errors.
+            # Retry only connection errors; bubble up other HTTP errors
             if attempt < max_retries and isinstance(e, requests.exceptions.ConnectionError):
-                sleep_s = backoff_base * (2**attempt)
-                print(
-                    f"[Summary][retry] Connection error, retrying in {sleep_s:.2f}s (attempt {attempt+1}/{max_retries}): {e}"
-                )
+                sleep_s = backoff_base * (2 ** attempt)
+                print(f"[Summary][retry] Connection error, retrying in {sleep_s:.2f}s (attempt {attempt+1}/{max_retries}): {e}")
                 time.sleep(sleep_s)
                 continue
             return f"[Error] {e}"
 
-
 async def summarize_async(text: str) -> str:
-    """Run the blocking summarizer in a thread to keep the event loop responsive."""
+    """
+    Run the blocking summarizer in a thread to keep the event loop responsive.
+    """
     return await asyncio.to_thread(summarize_with_ollama, text)
-
 
 class RollingSummarizer:
     """
-    Rolling buffer that collects text until a character threshold, then emits
-    segments aligned to sentence boundaries where possible.
+    Simple rolling buffer that collects text until a character threshold,
+    then emits segments aligned to sentence boundaries where possible.
     """
-
-    def __init__(
-        self,
-        threshold_chars: int = SUMMARY_CHUNK_CHARS,
-        fn: Optional[Callable[[str], str]] = None,
-        cooldown_sec: float = 0.0,
-        min_chunk_chars: int = 120,
-    ):
+    def __init__(self, threshold_chars: int = SUMMARY_CHUNK_CHARS, fn: Optional[Callable[[str], str]] = None, cooldown_sec: float = 0.0, min_chunk_chars: int = 120):
         self.threshold = max(1, int(threshold_chars))
         self.min_chunk = max(1, int(min_chunk_chars))
-        self.fn = fn or (lambda s: s)  # Identity by default
+        self.fn = fn or (lambda s: s)           # identity by default
         self.cooldown_sec = cooldown_sec
         self._buf: list[str] = []
-        self._carry: str = ""  # Residual text below min_chunk
+        self._carry: str = ""                   # residual text below min_chunk
         self._last_t = 0.0
 
     def _split_on_sentence(self, s: str, hard_len: int) -> int:
@@ -617,7 +490,6 @@ class RollingSummarizer:
         out: list[str] = []
 
         import time as _t
-
         if self.cooldown_sec and (_t.time() - self._last_t) < self.cooldown_sec and len(s) < self.threshold:
             return out
 
@@ -626,7 +498,7 @@ class RollingSummarizer:
             cut = self._split_on_sentence(s, self.threshold)
             chunk, s = s[:cut], s[cut:]
             if len(chunk) < self.min_chunk:
-                # Not worth summarizing; carry forward.
+                # Not worth summarizing; carry forward
                 self._carry = chunk + s
                 s = ""
                 break
@@ -639,7 +511,7 @@ class RollingSummarizer:
                 out.append(f"[Error summarizing chunk] {e}")
             print(f"[Rolling] Current buffer len={len(s)}, threshold={self.threshold}")
 
-        # Keep small remainder for the next push unless we can safely emit it.
+        # Keep small remainder for the next push unless we can safely emit it
         self._carry = s if len(s) < self.min_chunk else ""
         if self._carry == "" and s:
             try:
@@ -668,7 +540,6 @@ class RollingSummarizer:
         except Exception as e:
             return f"[Error summarizing tail] {e}"
 
-
 # =====================================================================
 # MODELS
 # =====================================================================
@@ -676,33 +547,28 @@ class IngestTranscriptRequest(BaseModel):
     id_prefix: str
     text: str
     metadata: Optional[Dict[str, Any]] = None
-    campaign_id: Optional[str] = None
-
+    campaign_id: Optional[str] = None  
 
 class IngestItem(BaseModel):
     id: str
     text: str
     metadata: Optional[Dict[str, Any]] = None
 
-
 class IngestRequest(BaseModel):
     items: List[IngestItem]
-    campaign_id: Optional[str] = None
-
+    campaign_id: Optional[str] = None 
 
 class QueryRequest(BaseModel):
     query: str
     top_k: int = 5
     where: Optional[Dict[str, Any]] = None
-    campaign_id: Optional[str] = None
-
+    campaign_id: Optional[str] = None 
 
 class AnswerRequest(BaseModel):
     question: str
     top_k: int = 5
     where: Optional[Dict[str, Any]] = None
-    campaign_id: Optional[str] = None
-
+    campaign_id: Optional[str] = None 
 
 # =====================================================================
 # ROUTES: HEALTH / ADMIN
@@ -726,17 +592,17 @@ def health(campaign_id: Optional[str] = None):
         },
     }
 
-
 @app.post("/admin/clear_collection")
 def admin_clear_collection(campaign_id: Optional[str] = None):
-    """Hard delete of all vectors and metadata in the selected campaign collection."""
+    """
+    Hard delete of all vectors and metadata in the selected campaign collection.
+    """
     coll = get_collection_for_campaign(campaign_id)
     try:
         coll.delete(where={})
         return {"ok": True, "cleared": True, "campaign_id": campaign_id}
     except Exception as e:
         raise HTTPException(500, f"clear failed: {e}")
-
 
 @app.post("/admin/reset_disk")
 def admin_reset_disk(campaign_id: Optional[str] = None):
@@ -756,7 +622,6 @@ def admin_reset_disk(campaign_id: Optional[str] = None):
     except Exception as e:
         raise HTTPException(500, f"reset_disk failed: {e}")
 
-
 # =====================================================================
 # RAG: INGEST / QUERY / ANSWER
 # =====================================================================
@@ -766,10 +631,10 @@ def ingest_transcript(req: IngestTranscriptRequest):
     Ingest a full transcript into the vector database (per campaign).
     - Splits the provided transcript text into overlapping sentence-based chunks.
     - Generates unique IDs for each chunk using the given `id_prefix`.
-    - Cleans and attaches metadata, tagging each entry as type="raw" and
-      including the `campaign_id` if provided.
-    - Inserts all chunks into the Chroma collection associated with the
-      specified campaign (or the default collection if none).
+    - Cleans and attaches metadata, tagging each entry as type="raw" and 
+    including the `campaign_id` if provided.
+    - Inserts all chunks into the Chroma collection associated with the 
+    specified campaign (or the default collection if none).
     """
     coll = get_collection_for_campaign(req.campaign_id)
     chunks = chunk_text(req.text)
@@ -784,7 +649,6 @@ def ingest_transcript(req: IngestTranscriptRequest):
     coll.add(ids=ids, documents=chunks, metadatas=metas)
     return {"ok": True, "count": len(ids), "campaign_id": req.campaign_id}
 
-
 @app.post("/ingest")
 def ingest(req: IngestRequest):
     """
@@ -793,7 +657,7 @@ def ingest(req: IngestRequest):
     - Cleans metadata to ensure only JSON-serializable fields are stored.
     - Automatically tags entries with the campaign ID when provided.
     - Adds all items to the Chroma collection for the selected campaign, or to
-      the default collection if no campaign is specified.
+    the default collection if no campaign is specified.
     """
     coll = get_collection_for_campaign(req.campaign_id)
     ids = [str(i.id) for i in req.items]
@@ -806,7 +670,6 @@ def ingest(req: IngestRequest):
         raise HTTPException(status_code=400, detail="ids/docs/metadatas length mismatch")
     coll.add(ids=ids, documents=docs, metadatas=metas)
     return {"ok": True, "count": len(ids), "campaign_id": req.campaign_id}
-
 
 @app.post("/query")
 def query(req: QueryRequest):
@@ -825,7 +688,7 @@ def query(req: QueryRequest):
         query_embeddings=qbatch,
         n_results=req.top_k,
         where=req.where,
-        include=["documents", "metadatas", "distances"],
+        include=["documents", "metadatas", "distances"]
     )
     ids = res.get("ids", [[]])[0]
     docs = res.get("documents", [[]])[0]
@@ -833,28 +696,24 @@ def query(req: QueryRequest):
     dists = res.get("distances", [[]])[0]
     items = []
     for i in range(len(ids)):
-        items.append(
-            {
-                "id": ids[i],
-                "text": docs[i],
-                "metadata": metas[i],
-                "distance": dists[i] if i < len(dists) else None,
-            }
-        )
+        items.append({
+            "id": ids[i],
+            "text": docs[i],
+            "metadata": metas[i],
+            "distance": dists[i] if i < len(dists) else None
+        })
     return {"results": items, "campaign_id": req.campaign_id}
-
 
 @app.post("/answer")
 def answer(req: AnswerRequest):
     """
-    Retrieve contextually relevant chunks and generate a grounded answer
+    Retrieve contextually relevant chunks and generate a grounded answer 
     using the LLM (RAG pipeline).
-
     - Embeds the user's question via the Ollama embedding model.
     - Queries the campaign's Chroma collection for the most relevant chunks.
     - Builds a short context window from the retrieved results.
-    - Prompts the LLM to answer *only* from that context — it will respond
-      with “I don't know” if no sufficient information is found.
+    - Prompts the LLM to answer *only* from that context — it will respond 
+    with “I don't know” if no sufficient information is found.
     - Optionally re-ranks results based on focus terms (e.g. named entities).
     """
     coll = get_collection_for_campaign(req.campaign_id)
@@ -868,39 +727,29 @@ def answer(req: AnswerRequest):
         query_embeddings=qbatch,
         n_results=req.top_k,
         where=effective_where,
-        include=["documents", "metadatas", "distances"],
+        include=["documents", "metadatas", "distances"]
     )
-    ids = res.get("ids", [[]])[0]
-    docs = res.get("documents", [[]])[0]
-    metas = res.get("metadatas", [[]])[0]
-    dists = res.get("distances", [[]])[0]
+    ids = res.get("ids", [[]])[0]; docs = res.get("documents", [[]])[0]; metas = res.get("metadatas", [[]])[0]; dists = res.get("distances", [[]])[0]
 
     if not ids:
-        return {
-            "answer": "I don't know based on the current knowledge.",
-            "used": [],
-            "campaign_id": req.campaign_id,
-        }
+        return {"answer": "I don't know based on the current knowledge.", "used": [], "campaign_id": req.campaign_id}
 
-    # Optional re-ranking based on a detected proper noun to improve relevance.
+    # Optional re-ranking based on a detected proper noun to improve relevance
     metas = [(m or {}) if isinstance(m, dict) else {} for m in metas]
     term = focus_term(req.question)
     if term:
-        def score(d: str) -> int:
-            return (d or "").lower().count(term)
-
+        def score(d: str) -> int: return (d or "").lower().count(term)
         scored = [(i, d, m, score(d)) for i, d, m in zip(ids, docs, metas)]
         filtered = [t for t in scored if t[3] > 0]
         chosen = filtered if filtered else scored
         if chosen:
             chosen.sort(key=lambda t: t[3], reverse=True)
-            ids, docs, metas = zip(*[(c[0], c[1], c[2]) for c in chosen])
-            ids, docs, metas = list(ids), list(docs), list(metas)
+            ids, docs, metas = zip(*[(c[0], c[1], c[2]) for c in chosen]); ids, docs, metas = list(ids), list(docs), list(metas)
 
-    # Trim to configured context size.
+    # Trim to configured context size
     ids, docs, metas = ids[:MAX_DOCS], docs[:MAX_DOCS], metas[:MAX_DOCS]
 
-    # Build a short plain-text context for the model.
+    # Build a short plain-text context for the model
     ctx_lines = []
     for i, (d, m, id_) in enumerate(zip(docs, metas, ids), start=1):
         tag = (m or {}).get("type")
@@ -908,15 +757,12 @@ def answer(req: AnswerRequest):
     context = "\n\n".join(ctx_lines)
 
     if ANSWER_ECHO_ONLY:
-        # Debug mode: just echo the first snippet.
+        # Debug mode: just echo the first snippet
         snippet = trim_text(docs[0] if docs else "", 200)
         used = [{"id": ids[0], "text": docs[0], "metadata": metas[0]}] if ids else []
-        return {
-            "answer": snippet or "I don't know based on the current knowledge.",
-            "used": used,
-        }
+        return {"answer": snippet or "I don't know based on the current knowledge.", "used": used}
 
-    # Constrained answering prompt; sentinel trimming avoids model ramble.
+    # Constrained answering prompt; sentinel trimming avoids model ramble
     prompt = (
         "Answer ONLY about the specific subject asked.\n"
         "Use ONLY the provided context; if it doesn't contain the answer, say you don't know.\n"
@@ -949,7 +795,7 @@ def answer(req: AnswerRequest):
         answer_text = (data.get("response") or "").strip()
         answer_text = answer_text.split(STOP_SENTINEL, 1)[0].strip()
         answer_text = first_n_sentences(answer_text, 2)
-        answer_text = re.sub(r"\s*\[\d+\]", "", answer_text)
+        answer_text = re.sub(r'\s*\[\d+\]', '', answer_text)
     except requests.exceptions.RequestException as e:
         raise HTTPException(status_code=502, detail=f"Ollama HTTP error: {e}")
     except ValueError as e:
@@ -957,7 +803,6 @@ def answer(req: AnswerRequest):
 
     used = [{"id": id_, "text": d, "metadata": m} for id_, d, m in zip(ids, docs, metas)]
     return {"answer": answer_text, "used": used, "campaign_id": req.campaign_id}
-
 
 # =====================================================================
 # WS SENDER
@@ -980,9 +825,8 @@ async def _ws_sender(ws: WebSocket, q: asyncio.Queue):
                 print(f"[WS][send_error] {e} — stopping sender")
                 break
     except asyncio.CancelledError:
-        # Normal shutdown path.
+        # Normal shutdown path
         pass
-
 
 async def _background_summary_task(send_queue: asyncio.Queue, seg: str):
     """
@@ -994,27 +838,25 @@ async def _background_summary_task(send_queue: asyncio.Queue, seg: str):
         out = (raw or "").strip()
 
         # --- Strip any echoed transcript/context labels & anything after them ---
-        m = re.search(r"(?im)^\s*(Transcript(?:\s+chunk)?|Context|Source|Input)\s*:", out)
+        m = re.search(r'(?im)^\s*(Transcript(?:\s+chunk)?|Context|Source|Input)\s*:', out)
         if m:
             out = out[:m.start()].strip()
 
-        # Remove explicit "Heading"/"Body" labels if the model sneaks them in.
+        # Remove explicit "Heading"/"Body" labels if the model sneaks them in
         lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
         if lines:
-            # Clean heading line.
-            heading = re.sub(r"^(?:Title|Heading|Body)\s*[—:\-]\s*", "", lines[0], flags=re.IGNORECASE)
-            heading = re.sub(r"^(?:[-*•]\s*|\d+[.)]\s*)", "", heading).strip()
-            # Build body from the rest, also stripping labels.
-            body = " ".join(
-                re.sub(r"^(?:Heading|Body)\s*[—:\-]\s*", "", ln, flags=re.IGNORECASE) for ln in lines[1:]
-            )
-            # Keep at most 2 sentences in body.
-            body_sents = re.split(r"(?<=[.!?])\s+", body) if body else []
+            # Clean heading line
+            heading = re.sub(r'^(?:Title|Heading|Body)\s*[—:\-]\s*', '', lines[0], flags=re.IGNORECASE)
+            heading = re.sub(r'^(?:[-*•]\s*|\d+[.)]\s*)', '', heading).strip()
+            # Build body from the rest, also stripping labels
+            body = " ".join(re.sub(r'^(?:Heading|Body)\s*[—:\-]\s*', '', ln, flags=re.IGNORECASE) for ln in lines[1:])
+            # Keep at most 2 sentences in body
+            body_sents = re.split(r'(?<=[.!?])\s+', body) if body else []
             body_sents = [s for s in body_sents if s]
             body = " ".join(body_sents[:2]).strip()
             out = "\n".join([heading] + ([body] if body else [])).strip()
 
-        # Remove any stray dice/mechanics or meta-commentary the model might emit.
+        # Remove any stray dice/mechanics or meta-commentary the model might emit
         _ban = re.compile(
             r"(?:\bDC\s*\d+\b|\b\d+\s*\+\s*\d+\b|\bnat(?:ural)?\s*1\b|\bnat(?:ural)?\s*20\b|"
             r"\broll(?:ed)?\b|\bdice\b|\bmodifier\b|\badvantage\b|\bdisadvantage\b)",
@@ -1025,6 +867,7 @@ async def _background_summary_task(send_queue: asyncio.Queue, seg: str):
             r"the narrative does not provide|the text does not mention)",
             flags=re.IGNORECASE,
         )
+        # Split by lines; keep headings + sentences that are clean
         cleaned_lines = []
         for ln in out.splitlines():
             s = ln.strip()
@@ -1035,7 +878,7 @@ async def _background_summary_task(send_queue: asyncio.Queue, seg: str):
             cleaned_lines.append(s)
         out = "\n".join(cleaned_lines)
 
-        # Detect SKIP early to avoid emitting empty summaries.
+        # Detect SKIP early to avoid emitting empty summaries
         first_line = ""
         for ln in out.splitlines():
             s = ln.strip()
@@ -1045,19 +888,19 @@ async def _background_summary_task(send_queue: asyncio.Queue, seg: str):
         if not out or first_line.upper().startswith("SKIP"):
             return
 
-        # Parse a compact title + body from the model output.
+        # Parse a compact title + body from the model output
         lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
         title = "Summary"
         text_lines: list[str] = []
         if lines:
-            # Strip accidental prefixes on the first line.
-            first = re.sub(r"^(?:Title\s*:)?\s*", "", lines[0], flags=re.IGNORECASE)
-            first = re.sub(r"^(?:[-*•]\s*|\d+[.)]\s*)", "", first).strip()
+            # Strip accidental prefixes on the first line ("Title:", bullets, numbering)
+            first = re.sub(r'^(?:Title\s*:)?\s*', '', lines[0], flags=re.IGNORECASE)
+            first = re.sub(r'^(?:[-*•]\s*|\d+[.)]\s*)', '', first).strip()
             if first:
                 title = first
             text_lines = lines[1:]
 
-        cleaned = [re.sub(r"^(?:[-*•]\s*|\d+[.)]\s*)", "", ln).strip() for ln in text_lines]
+        cleaned = [re.sub(r'^(?:[-*•]\s*|\d+[.)]\s*)', '', ln).strip() for ln in text_lines]
         text = "\n".join([ln for ln in cleaned if ln]) or title
         payload = {"summary_item": {"title": title, "text": text}}
         await send_queue.put(json.dumps(payload, ensure_ascii=False))
@@ -1065,14 +908,12 @@ async def _background_summary_task(send_queue: asyncio.Queue, seg: str):
     except Exception as e:
         print(f"[WS] background summary failed: {e}")
 
-
 # =====================================================================
 # WS AUDIO HANDLER
 # =====================================================================
 async def handle_audio_ws(websocket: WebSocket):
     """
     Main audio WebSocket handler.
-
     Receives interleaved binary audio frames and optional text control frames.
     Performs VAD-gated buffering, partial recognition, final ASR, live embedding,
     and background summarization with bounded concurrency.
@@ -1089,10 +930,7 @@ async def handle_audio_ws(websocket: WebSocket):
     last_partial_text = ""
     closing = False
 
-    # Per-connection session start for relative timing metadata
-    session_start = time.time()
-
-    # Overlap tail improves partial recognition continuity.
+    # Overlap tail improves partial recognition continuity
     tail = np.zeros(int(OVERLAP_SEC * SAMPLE_RATE), dtype=np.int16)
     buf: List[np.ndarray] = []
 
@@ -1100,17 +938,17 @@ async def handle_audio_ws(websocket: WebSocket):
     LISTENING_HINT_DELAY = 0.8
     listening_sent = False
 
-    # Rolling summarizer collects final ASR text and emits segments.
+    # Rolling summarizer collects final ASR text and emits segments
     rolling = RollingSummarizer(
         threshold_chars=int(os.getenv("SUMMARY_CHUNK_CHARS", str(SUMMARY_CHUNK_CHARS))),
         fn=lambda s: s,
-        cooldown_sec=0.5,
+        cooldown_sec=0.5
     )
 
-    # Optional campaign scoping passed via query, header, or JSON frame.
+    # Optional campaign scoping passed via query, header, or JSON frame
     campaign_id: Optional[str] = None
 
-    # Extract campaignId from query string if present.
+    # Extract campaignId from query string if present
     try:
         qp = dict(websocket.query_params)
         if qp.get("campaignId"):
@@ -1119,7 +957,7 @@ async def handle_audio_ws(websocket: WebSocket):
     except Exception:
         pass
 
-    # Extract campaignId from headers if present.
+    # Extract campaignId from headers if present
     try:
         hdrs = getattr(websocket, "headers", None)
         if not campaign_id and hdrs:
@@ -1129,10 +967,6 @@ async def handle_audio_ws(websocket: WebSocket):
                 print(f"[WS] campaign_id set via header -> {campaign_id}")
     except Exception:
         pass
-
-    # --- Optional per-connection noise learning warmup (no stored profile) ---
-    noise_learned = not USE_NOISE_REDUCTION
-    noise_frames_seen = 0
 
     async def _flush_and_finish(reason: str):
         """
@@ -1145,7 +979,7 @@ async def handle_audio_ws(websocket: WebSocket):
             bg_tasks.add(task)
             task.add_done_callback(lambda t, s=bg_tasks: s.discard(t))
 
-        # Wait briefly for any pending summaries, then cancel the rest.
+        # Wait briefly for any pending summaries, then cancel the rest
         try:
             await asyncio.wait_for(asyncio.gather(*bg_tasks, return_exceptions=True), timeout=SUMMARY_DRAIN_TIMEOUT)
         except asyncio.TimeoutError:
@@ -1163,9 +997,9 @@ async def handle_audio_ws(websocket: WebSocket):
         Convert the buffered PCM into text, send a 'final' message,
         push the text into Chroma, and schedule summarization of segments.
         """
-        nonlocal speaking, tail, buf, last_partial_text, last_partial_t, utter_start_t
+        nonlocal speaking, tail, buf, last_partial_text, last_partial_t
         try:
-            # Concatenate overlap tail with buffered frames to form the utterance.
+            # Concatenate overlap tail with buffered frames to form the utterance
             utter = np.concatenate([tail, *buf]) if buf else tail
             wave = utter.astype(np.float32) / 32768.0
             final_text = transcribe_float32(wave)
@@ -1175,26 +1009,19 @@ async def handle_audio_ws(websocket: WebSocket):
                 if not closing:
                     await send_queue.put(json.dumps({"final": final_text}))
 
-                # Live embedding of recognized text for immediate retrieval.
+                # Live embedding of recognized text for immediate retrieval
                 try:
                     coll = get_collection_for_campaign(campaign_id)
                     doc_id = f"live_{int(time.time()*1000)}"
                     meta = {"type": "raw", "source": "live_ws"}
                     if campaign_id:
                         meta["campaign_id"] = campaign_id
-                    # Add relative timing metadata if we have an utterance start time
-                    now_ts = time.time()
-                    if utter_start_t:
-                        meta["start_rel"] = max(0.0, utter_start_t - session_start)
-                        meta["end_rel"] = max(meta["start_rel"], now_ts - session_start)
                     coll.add(ids=[doc_id], documents=[final_text], metadatas=[meta])
-                    print(
-                        f"[Embed] Added live chunk -> id={doc_id}, len={len(final_text)} chars, campaign={campaign_id}"
-                    )
+                    print(f"[Embed] Added live chunk -> id={doc_id}, len={len(final_text)} chars, campaign={campaign_id}")
                 except Exception as e:
                     print(f"[Embed] failed to add live chunk: {e}")
 
-                # Schedule summarization tasks for emitted segments.
+                # Schedule summarization tasks for emitted segments
                 segments = rolling.push(final_text)
                 if isinstance(segments, str):
                     segments = [segments] if segments else []
@@ -1208,7 +1035,7 @@ async def handle_audio_ws(websocket: WebSocket):
                     bg_tasks.add(task)
                     task.add_done_callback(lambda t, s=bg_tasks: s.discard(t))
 
-                # Optionally flush small remainder so UI doesn't wait too long.
+                # Optionally flush small remainder so UI doesn't wait too long
                 if (not segments) and SUMMARY_FORCE_FLUSH_AFTER_FINAL:
                     small = rolling.flush()
                     if small and len(small) >= SUMMARY_MIN_FLUSH_CHARS:
@@ -1216,7 +1043,7 @@ async def handle_audio_ws(websocket: WebSocket):
                         bg_tasks.add(task)
                         task.add_done_callback(lambda t, s=bg_tasks: s.discard(t))
                     elif small:
-                        # Keep the tiny remainder for future accumulation.
+                        # Keep the tiny remainder for future accumulation
                         try:
                             rolling._buf = [small]
                         except Exception:
@@ -1224,10 +1051,10 @@ async def handle_audio_ws(websocket: WebSocket):
         except Exception as e:
             print(f"[WS] _finalize_current_utter failed: {e}")
         finally:
-            # Update overlap window and reset accumulators.
+            # Update overlap window and reset accumulators
             utter = np.concatenate([tail, *buf]) if buf else tail
             if utter.size >= tail.size:
-                tail = utter[-tail.size :].copy()
+                tail = utter[-tail.size:].copy()
             else:
                 z = np.zeros(tail.size - utter.size, dtype=np.int16)
                 tail = np.concatenate([z, utter])
@@ -1235,14 +1062,13 @@ async def handle_audio_ws(websocket: WebSocket):
             last_partial_text = ""
             last_partial_t = now()
             speaking = False
-            utter_start_t = None
 
-    # Measure per-utterance time to enforce MAX_UTTER_SEC.
+    # Measure per-utterance time to enforce MAX_UTTER_SEC
     utter_start_t: Optional[float] = None
 
     try:
         while True:
-            # Receive either control text or binary audio with idle timeout.
+            # Receive either control text or binary audio with idle timeout
             try:
                 msg = await asyncio.wait_for(websocket.receive(), timeout=SESSION_IDLE_SEC)
             except asyncio.TimeoutError:
@@ -1252,12 +1078,12 @@ async def handle_audio_ws(websocket: WebSocket):
                     await websocket.close()
                 break
 
-            # Handle text control frames.
+            # Handle text control frames
             if "text" in msg and msg["text"] is not None:
                 text_frame = (msg["text"] or "").strip()
                 if text_frame:
                     print(f"[WS] text frame: {text_frame[:160]}")
-                # Simple JSON protocol for setting campaign.
+                # Simple JSON protocol for setting campaign
                 try:
                     obj = json.loads(text_frame)
                     if isinstance(obj, dict):
@@ -1268,60 +1094,40 @@ async def handle_audio_ws(websocket: WebSocket):
                             print(f"[WS] campaign_id set via JSON -> {campaign_id}")
                             if not closing:
                                 try:
-                                    await send_queue.put(
-                                        json.dumps({"status": "campaign_set", "campaignId": campaign_id})
-                                    )
+                                    await send_queue.put(json.dumps({"status": "campaign_set", "campaignId": campaign_id}))
                                 except Exception:
                                     pass
                             continue
                 except Exception:
                     pass
 
-                # Special terminator for client-driven close.
+                # Special terminator for client-driven close
                 if text_frame == "__END__":
                     await _flush_and_finish("__END__")
                     closing = True
                     break
 
-                continue  # Ignore other text frames.
+                continue  # Ignore other text frames
 
-            # Guard against non-binary messages.
+            # Guard against non-binary messages
             if "bytes" not in msg or msg["bytes"] is None:
                 continue
 
-            # Decode raw PCM16 from the binary frame.
+            # Decode raw PCM16 from the binary frame
             message = msg["bytes"]
             pcm16 = np.frombuffer(message, dtype=np.int16)
 
-            # ------------------ Optional preprocessing + VAD choice ------------------
-            # Simple warmup window before enabling noise reduction
-            if USE_NOISE_REDUCTION and not noise_learned:
-                noise_frames_seen += 1
-                if noise_frames_seen >= NOISE_LEARN_FRAMES:
-                    noise_learned = True  # commit to applying NR from now on
-
-            pcm16_in = pcm16
-            if USE_NOISE_REDUCTION and noise_learned:
-                pcm16_in = _nr_apply_int16(pcm16_in)
-
-            # Choose VAD: Silero (if enabled/available) else WebRTC
-            if USE_SILERO_VAD and _silero_vad is not None:
-                is_speech_flag, _vad_conf = _is_speech_silero(pcm16_in)
-            else:
-                is_speech_flag = is_speech_int16(pcm16_in)
-                _vad_conf = 0.0  # placeholder for parity
-
-            # ------------------ Main streaming state machine ------------------
-            if is_speech_flag:
+            # VAD branch: accumulate speech or send listening hint
+            if is_speech_int16(pcm16):
                 if not speaking:
                     speaking = True
                     listening_sent = False
                     utter_start_t = now()
                     print("[State] speaking started")
                 last_voice = now()
-                buf.append(pcm16_in)
+                buf.append(pcm16)
 
-                # Periodic partial recognition for UX responsiveness.
+                # Periodic partial recognition for UX responsiveness
                 if now() - last_partial_t >= PARTIAL_INTERVAL:
                     chunk = np.concatenate([tail, *buf]) if buf else tail
                     wave = chunk.astype(np.float32) / 32768.0
@@ -1337,7 +1143,7 @@ async def handle_audio_ws(websocket: WebSocket):
                     last_partial_t = now()
 
             else:
-                # If quiet for a short time and not speaking, send a passive hint.
+                # If quiet for a short time and not speaking, send a passive hint
                 if (not speaking) and (now() - last_voice >= LISTENING_HINT_DELAY) and (not listening_sent):
                     if not closing:
                         try:
@@ -1346,19 +1152,11 @@ async def handle_audio_ws(websocket: WebSocket):
                             pass
                     listening_sent = True
 
-                # If currently speaking, detect end of utterance by silence window.
+                # If currently speaking, detect end of utterance by silence window
                 if speaking and (now() - last_voice) * 1000 >= SILENCE_END_MS:
-                    # Drop micro-utterances under MIN_SPEECH_MS (optional guard; default 300ms)
-                    if utter_start_t and ((now() - utter_start_t) * 1000) < MIN_SPEECH_MS:
-                        speaking = False
-                        buf.clear()
-                        last_partial_text = ""
-                        last_partial_t = now()
-                        utter_start_t = None
-                    else:
-                        await _finalize_current_utter("silence")
+                    await _finalize_current_utter("silence")
 
-            # Hard timeout to prevent unbounded buffers on very long speech.
+            # Hard timeout to prevent unbounded buffers on very long speech
             if speaking and utter_start_t and (now() - utter_start_t) >= MAX_UTTER_SEC:
                 print(f"[ForceFinal] {MAX_UTTER_SEC}s reached — forcing final")
                 await _finalize_current_utter("timeout")
@@ -1367,7 +1165,7 @@ async def handle_audio_ws(websocket: WebSocket):
             await asyncio.sleep(0)
 
     except WebSocketDisconnect:
-        # Normal client disconnect; drain summaries and stop sender.
+        # Normal client disconnect; drain summaries and stop sender
         print("[WS] disconnected")
         try:
             leftover = rolling.flush().strip()
@@ -1390,7 +1188,7 @@ async def handle_audio_ws(websocket: WebSocket):
             return
 
     except Exception as e:
-        # Any unexpected error: cancel background work and stop sender cleanly.
+        # Any unexpected error: cancel background work and stop sender cleanly
         print("[WS] error:", e)
         for t in list(bg_tasks):
             t.cancel()
@@ -1401,7 +1199,6 @@ async def handle_audio_ws(websocket: WebSocket):
             await sender_task
         return
 
-
 @app.websocket("/audio")
 async def ws_audio_legacy(websocket: WebSocket):
     """
@@ -1410,7 +1207,6 @@ async def ws_audio_legacy(websocket: WebSocket):
     """
     await websocket.accept()
     await handle_audio_ws(websocket)
-
 
 # =====================================================================
 # FILE TRANSCRIBE
@@ -1432,7 +1228,7 @@ async def transcribe(file: UploadFile = File(...)):
             language=LANG,
             beam_size=BEAM,
             vad_filter=True,
-            vad_parameters=dict(min_silence_duration_ms=500),
+            vad_parameters=dict(min_silence_duration_ms=500)
         )
         text = " ".join(s.text for s in segs).strip()
         return {"text": text}
@@ -1442,7 +1238,6 @@ async def transcribe(file: UploadFile = File(...)):
         if tmp_path:
             with contextlib.suppress(Exception):
                 os.remove(tmp_path)
-
 
 # =====================================================================
 # ENTRYPOINT
