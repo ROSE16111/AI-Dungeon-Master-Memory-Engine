@@ -25,6 +25,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
+    "framer-motion": "^12.23.24",
     "keyword-extractor": "^0.0.28",
     "lucide-react": "^0.539.0",
     "mammoth": "^1.11.0",
