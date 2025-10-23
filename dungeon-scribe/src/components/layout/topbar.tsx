@@ -30,6 +30,9 @@ export function TopBar() {
   const [campaign, setCampaign] = React.useState<{ id: string; name: string } | null>(null);
   // Read role names under this campaign (for avatar dropdown display)
   const [roleNames, setRoleNames] = React.useState<string[] | null>(null);
+  // Preferred role name remembered at login (per campaign)
+  const [preferredRole, setPreferredRole] = React.useState<string | null>(null);
+
 
   // Fetch current campaign
   React.useEffect(() => {
@@ -58,6 +61,20 @@ export function TopBar() {
         }
       })
       .catch(() => setRoleNames([]));
+  }, [campaign?.id]);
+
+  // Read preferred role (saved at login) when campaign changes
+  React.useEffect(() => {
+    if (!campaign?.id) {
+      setPreferredRole(null);
+      return;
+    }
+    try {
+      const val = localStorage.getItem(`preferredRole:${campaign.id}`);
+      setPreferredRole(val || null); // null → show dash
+    } catch {
+      setPreferredRole(null);
+    }
   }, [campaign?.id]);
 
   const items = [
@@ -176,13 +193,7 @@ export function TopBar() {
                 </div>
                 <div className="opacity-80">
                   <span className="opacity-60">Role:</span>{' '}
-                  <span className="font-medium">
-                    {roleNames
-                      ? roleNames.length
-                        ? roleNames.join(', ')
-                        : '—'
-                      : '…'}
-                  </span>
+                  <span className="font-medium">{preferredRole ?? '—'}</span>
                 </div>
               </div>
 

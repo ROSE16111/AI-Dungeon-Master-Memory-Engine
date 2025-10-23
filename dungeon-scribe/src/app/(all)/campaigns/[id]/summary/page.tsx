@@ -843,6 +843,8 @@ function CharacterCarouselStacked({
     setHintOn(true);
     window.setTimeout(() => setHintOn(false), 900);
   };
+// Make sure we only apply the preferred role once per mount
+  const preferredAppliedRef = useRef(false);
 
   // On mount, determine campaignId
   useEffect(() => {
@@ -915,6 +917,31 @@ function CharacterCarouselStacked({
       })
       .finally(() => setLoading(false));
   }, [campaignId]);
+  
+  // Prefer showing the remembered role in the center when entering the page
+  useEffect(() => {
+    if (preferredAppliedRef.current) return;            // apply only once
+    if (!campaignId || items.length === 0) return;
+
+    try {
+      const key = `preferredRole:${campaignId}`;
+      const saved = localStorage.getItem(key);
+      if (!saved) return;
+
+      // Find the exact-match index (case-insensitive)
+      const idx = items.findIndex(
+        (x) => x.name.toLowerCase() === saved.toLowerCase()
+      );
+      if (idx >= 0) {
+        setCur(idx);                // center on the preferred role
+        preferredAppliedRef.current = true;
+        // Optional: visual hint
+        // fireHint();
+      }
+    } catch {
+      // ignore
+    }
+  }, [campaignId, items]);
 
   // Upload a new cover and persist to Role.url via /api/role-cover
   const handleUploadCover = async (roleId: string, file: File) => {

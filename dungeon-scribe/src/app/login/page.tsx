@@ -223,6 +223,15 @@ export default function LoginPage() {
           if (typeof window !== "undefined" && item) {
             if (item.id) localStorage.setItem("currentCampaignId", item.id);
             if (item.name) localStorage.setItem("currentCampaignTitle", item.name);
+
+            if (role) {
+              try {
+                localStorage.setItem(`preferredRole:${item.id}`, role);
+              } catch {}
+            } else {
+              // Optional: if no role chosen this time, you may clear previous memory
+              // try { localStorage.removeItem(`preferredRole:${item.id}`) } catch {}
+            }
           }
         }
       } catch (err) {
