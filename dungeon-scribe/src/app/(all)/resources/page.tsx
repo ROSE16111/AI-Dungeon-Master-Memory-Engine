@@ -193,6 +193,7 @@ function ResourceCard({
         aria-label="Delete resource"
         title="Delete this resource"
       >
+        🗑️
       </button>
 
       <CardHeader className="p-0">

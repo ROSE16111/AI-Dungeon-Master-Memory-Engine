@@ -30,14 +30,23 @@ export async function GET(req: NextRequest) {
       // merge character information
       const rolesWithSummaries = campaign.roles.map((role) => {
         const summary = campaign.summaries.find((s) => s.roleName === role.name);
+
+        // 1)  Role.url；
+        // 2) default 
+        const finalImg = role.url || "/Griff.png";
+
         return {
           id: role.id,
           name: role.name,
           level: role.level,
-          details: summary?.content || `Level ${role.level} character. No detailed summary available yet.`,
-          img: summary?.imageBase64 ? `data:image/png;base64,${summary.imageBase64}` : "/Griff.png",
+          details:
+            summary?.content ||
+            `Level ${role.level} character. No detailed summary available yet.`,
+          url: role.url ?? null, // ← original url
+          img: finalImg,         // ← for frontend
         };
       });
+
 
       return NextResponse.json({ roles: rolesWithSummaries });
     }

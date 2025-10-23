@@ -25,6 +25,7 @@ model Role {
   level      Int
   campaignId String
   campaign   Campaign @relation(fields: [campaignId], references: [id])
+  url         String?
 }
 
 model AllTxt {

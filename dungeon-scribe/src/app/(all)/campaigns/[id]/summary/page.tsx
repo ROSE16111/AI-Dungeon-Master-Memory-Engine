@@ -829,8 +829,9 @@ function CharacterCarouselStacked({
 }) {
   const params = useParams();
   const [campaignId, setCampaignId] = useState<string | undefined>(undefined);
+  // Keep role id so we can PATCH a specific role cover
   const [items, setItems] = useState<
-    Array<{ name: string; img: string; details: string }>
+    Array<{ id: string; name: string; img: string; details: string }>
   >([]);
   const [loading, setLoading] = useState(true);
   const [cur, setCur] = useState(0);
@@ -884,18 +885,23 @@ function CharacterCarouselStacked({
         console.log("API response data:", data);
         if (data.roles && Array.isArray(data.roles)) {
           const processedRoles = data.roles.map((role: any) => {
+            const img =
+              (role?.url && String(role.url)) ||
+              (role?.img && String(role.img)) ||
+              "/Griff.png";
+
             console.log(
-              `Character "${role.name}" image data:`,
-              role.img ? role.img.substring(0, 50) + "..." : "NO IMAGE"
+              `Character "${role.name}" → img:`,
+              img ? img.substring(0, 50) + "..." : "NO IMAGE"
             );
+
             return {
+              id: role.id,                  // NEW: keep id for uploads
               name: role.name,
-              img: role.img || "/Griff.png",
+              img,                          // prefer role.url, then role.img, else default
               details:
                 role.details ||
-                `Level ${
-                  role.level || 1
-                } character. No detailed description available yet.`,
+                `Level ${role.level || 1} character. No detailed description available yet.`,
             };
           });
           setItems(processedRoles);
@@ -909,6 +915,49 @@ function CharacterCarouselStacked({
       })
       .finally(() => setLoading(false));
   }, [campaignId]);
+
+  // Upload a new cover and persist to Role.url via /api/role-cover
+  const handleUploadCover = async (roleId: string, file: File) => {
+    try {
+      // 1) basic client-side guard
+      const ALLOWED = new Set(["image/png", "image/jpeg", "image/webp"]);
+      if (!ALLOWED.has(file.type)) {
+        alert("Please choose a PNG/JPEG/WEBP image.");
+        return;
+      }
+      const MAX = 2 * 1024 * 1024; // 2MB
+      if (file.size > MAX) {
+        alert("Image too large. Please choose a file ≤ 2MB.");
+        return;
+      }
+
+      // 2) read as data URL (e.g. "data:image/png;base64,AAAA...")
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result));
+        r.onerror = reject;
+        r.readAsDataURL(file);
+      });
+
+      // 3) persist to backend (store in Role.url)
+      const res = await fetch("/api/role-cover", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: roleId, url: dataUrl }),
+      });
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "");
+        throw new Error(txt || `Upload failed (${res.status})`);
+      }
+
+      // 4) optimistic UI: update the displayed image immediately
+      setItems((prev) => prev.map((x) => (x.id === roleId ? { ...x, img: dataUrl } : x)));
+      alert("Cover updated!");
+    } catch (err: any) {
+      console.error(err);
+      alert(err?.message || "Failed to upload cover");
+    }
+  };
 
   // Helper functions (always defined)
   const mod = (i: number, m: number) => ((i % m) + m) % m;
@@ -1005,12 +1054,14 @@ function CharacterCarouselStacked({
     index,
     isActive,
     direction,
+    onUpload,
   }: {
-    data: { name: string; img: string; details: string };
+    data: { id: string; name: string; img: string; details: string };
     type: "left" | "center" | "right";
     index: number;
     isActive?: boolean;
     direction?: "left" | "right";
+    onUpload: (roleId: string, file: File) => void;
   }) {
     const styleByType: Record<typeof type, React.CSSProperties> = {
       left: {
@@ -1132,6 +1183,33 @@ function CharacterCarouselStacked({
                         }
                       }}
                     />
+                    {/* Hidden file input for this card */}
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  id={`role-cover-${data.id}-${index}`}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) onUpload(data.id, f);
+                    e.currentTarget.value = ""; // allow reselecting same file
+                  }}
+                />
+
+                {/* Bottom-right overlay "Change" button */}
+                <button
+                  type="button"
+                  title="Change cover"
+                  aria-label="Change cover"
+                  className="absolute right-3 bottom-3 z-20 px-2 py-1 rounded bg-black/60 text-white text-xs hover:bg-black/75"
+                  onClick={(e) => {
+                    e.stopPropagation(); // avoid flipping the card
+                    const el = document.getElementById(`role-cover-${data.id}-${index}`) as HTMLInputElement | null;
+                    el?.click();
+                  }}
+                >
+                  🖼️ Change
+                </button>
                   </div>
                   <div
                     className="absolute"
@@ -1240,6 +1318,8 @@ function CharacterCarouselStacked({
                     }
                   }}
                 />
+                
+
               </div>
               <div
                 className="absolute"
@@ -1380,15 +1460,16 @@ function CharacterCarouselStacked({
 
       {/* // Three display slots*/}
       <div className="relative" style={{ height: 438 }}>
-        <Card data={items[idxL]} type="left" index={idxL} />
+        <Card data={items[idxL]} type="left" index={idxL} onUpload={handleUploadCover} />
         <Card
           data={items[cur]}
           type="center"
           index={cur}
           isActive
           direction={direction}
+          onUpload={handleUploadCover}
         />
-        <Card data={items[idxR]} type="right" index={idxR} />
+        <Card data={items[idxR]} type="right" index={idxR} onUpload={handleUploadCover} />
       </div>
 
       {/* Indicator dots: count = N*/}
