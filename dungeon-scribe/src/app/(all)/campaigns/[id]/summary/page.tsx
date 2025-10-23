@@ -932,7 +932,7 @@ function CharacterCarouselStacked({
       lastTargetRef.current = i;
       return;
     }
-    if (sameTarget) 
+    if (sameTarget) {
       fireHint();
       return;
     }
