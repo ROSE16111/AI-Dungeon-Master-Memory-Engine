@@ -172,10 +172,12 @@ function CardDisplay({
   story,
   onAction,
   onDelete,
+  onUploadCover,
 }: {
   story: Story;
   onAction: (s: Story, type: "continue" | "summary") => void;
   onDelete: (s: Story) => void;
+  onUploadCover: (s: Story, file: File) => void;
 }) {
   return (
     <div className="relative w-[300px] bg-white rounded-xl shadow-lg overflow-hidden border border-black/10">
@@ -201,7 +203,37 @@ function CardDisplay({
             if (t.src !== "/Griff.png") t.src = "/Griff.png";
           }}
         />
+
+        {/* Hidden file input for cover upload */}
+      <input
+      type="file"
+      accept="image/*"
+      className="hidden"
+      id={`cover-input-${story.id}`}
+      onChange={(e) => {
+        const file = e.target.files?.[0];
+        if (file) onUploadCover(story, file);
+        // reset value so selecting the same file again still triggers change
+        e.currentTarget.value = "";
+      }}
+    />
+
+    {/* Small overlay button to trigger the hidden input */}
+    <button
+      type="button"
+      title="Change cover"
+      aria-label="Change cover"
+      className="absolute right-2 bottom-2 z-30 px-2 py-1 rounded bg-black/60 text-white text-xs hover:bg-black/75"
+      onClick={() => {
+        const el = document.getElementById(`cover-input-${story.id}`) as HTMLInputElement | null;
+        el?.click();
+      }}
+    >
+      🖼️ Change
+    </button>
       </div>
+
+    
 
       <div className="px-4 pt-3 pb-3">
         <div className="flex justify-between items-center">
@@ -520,6 +552,70 @@ export default function HistoryPage() {
     }
   };
 
+  // PUT THIS INSIDE HistoryPage component, near handleDelete
+  const handleUploadCover = async (story: Story, file: File) => {
+    try {
+      // Basic guard: size <= 2MB (you can tweak)
+      const MAX = 2 * 1024 * 1024;
+      if (file.size > MAX) {
+        alert("Image too large. Please choose a file <= 2MB.");
+        return;
+      }
+
+      // Read file as base64
+      const b64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+
+      // b64 is like "data:image/png;base64,AAAA..."
+      const commaIdx = b64.indexOf(",");
+      const rawBase64 = commaIdx >= 0 ? b64.slice(commaIdx + 1) : b64;
+
+      // Call backend to persist (PATCH to /api/summary-cover)
+      // Send both id and imageBase64 in JSON body to match your new API
+      const res = await fetch(`/api/summary-cover`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: story.id, imageBase64: rawBase64 }),
+      });
+
+
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "");
+        throw new Error(txt || `Upload failed (status ${res.status})`);
+      }
+
+      // Optimistically update UI
+      const newDataUrl = `data:image/${file.type.split("/")[1] || "png"};base64,${rawBase64}`;
+
+      setStories((prev) =>
+        prev.map((s) => (s.id === story.id ? { ...s, imageUrl: newDataUrl } : s))
+      );
+
+      // Also update recentRecords in localStorage (so History uses the new cover)
+      try {
+        const raw = localStorage.getItem("recentRecords");
+        if (raw) {
+          const arr = JSON.parse(raw);
+          if (Array.isArray(arr)) {
+            const updated = arr.map((r: any) =>
+              r.id === story.id ? { ...r, imageUrl: newDataUrl } : r
+            );
+            localStorage.setItem("recentRecords", JSON.stringify(updated));
+          }
+        }
+      } catch {}
+
+      alert("Cover updated!");
+    } catch (err: any) {
+      console.error(err);
+      alert(err?.message || "Failed to upload cover");
+    }
+  };
+
   /******** View structure and styles *******/
   return (
     <div className="min-h-screen text-white relative">
@@ -557,6 +653,7 @@ export default function HistoryPage() {
                   story={s}
                   onAction={handleAction}
                   onDelete={(story) => handleDelete(story)}
+                  onUploadCover={(story, file) => handleUploadCover(story, file)}
                 />
               ))}
             </div>

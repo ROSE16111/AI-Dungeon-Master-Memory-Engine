@@ -438,7 +438,7 @@ function CardOnPaper({
   const [title, setTitle] = useState("");
   const [date, setDate] = useState("");
   const initialSummary = ``.trim(); 
-
+  const [coverUrl, setCoverUrl] = useState<string>("/Griff.png");
 // —— New: Edit mode & text stat
 
   const [editable, setEditable] = useState(false);
@@ -490,6 +490,16 @@ function CardOnPaper({
         const campaigns = data.campaigns || [];
         const camp = campaigns.find((c: any) => c.id === campaignId);
         if (camp) {
+          // helper: convert imageBase64 (if any) into a data URL, else fallback
+        const toImageUrl = (s: any) => {
+          if (!s) return "/Griff.png";
+          if (s.imageUrl && typeof s.imageUrl === "string") return s.imageUrl; // in case your API already computed it
+          if (s.imageBase64 && typeof s.imageBase64 === "string") {
+            // NOTE: DB 里只存了 base64，没有 MIME；和 History 页保持一致用 png
+            return `data:image/png;base64,${s.imageBase64}`;
+          }
+          return "/Griff.png";
+        };
           // Wire visible title and update date to campaign data
           if (camp.title) setTitle(camp.title);
           if (camp.updateDate)
@@ -507,6 +517,7 @@ function CardOnPaper({
                 if (found) {
                   setSummary(found.content || initialSummary);
                   setSummaryId(found.id || null);
+                  setCoverUrl(toImageUrl(found)); // show the selected summary's cover
                   handled = true;
                 }
                 try {
@@ -528,16 +539,19 @@ function CardOnPaper({
                 camp.sessionSummaries[camp.sessionSummaries.length - 1];
               setSummary(latest.content || initialSummary);
               setSummaryId(latest.id || null);
+              setCoverUrl(toImageUrl(latest));
             } else {
               // Explicitly indicate there's no summary for this campaign
               setSummary("There is no summary for this campaign.");
               setSummaryId(null);
+              setCoverUrl("/Griff.png"); 
             }
           }
         }
       })
       .catch((err) => console.error("Failed to load session summary:", err));
   }, [campaignId]);
+  
 // When keyword or content changes: count matches and scroll to the first one
   useEffect(() => {
     const vp = viewportRef.current;
@@ -623,11 +637,15 @@ function CardOnPaper({
             style={{ width: 180, height: 180, background: "#00000010" }}
           >
             <img
-              src="/Griff.png"
+              src={coverUrl}
               alt="cover"
               width={180}
               height={180}
               className="object-cover w-full h-full"
+              onError={(e) => {
+                const t = e.currentTarget as HTMLImageElement;
+                if (t.src !== "/Griff.png") t.src = "/Griff.png"; // graceful fallback
+              }}
             />
           </div>
 

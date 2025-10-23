@@ -5,7 +5,7 @@
 - `npm run dev` to test on AI-Dungeon-Master-Memory-Engine/dungeon-scribe
 - http://localhost:3000/dashboard
 - nvm + Node 20
-  安装 Node（建议 nvm + Node 20）、建立数据库： npm i、npx prisma generate、npx prisma migrate dev
+  安装 Node 15.5.3（建议 nvm + Node 20）、建立数据库： npm i、npx prisma generate、npx prisma migrate dev
 - to exist: Ctrl + C
 - framework: React+Tailwind+shadcn/ui
 - components:`npx shadcn@latest add avatar separator button card input label tabs dialog textarea sheet`
