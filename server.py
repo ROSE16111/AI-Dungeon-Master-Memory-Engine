@@ -167,59 +167,57 @@ def embed_query_batched(text: str) -> List[List[float]]:
     raise RuntimeError(f"Unexpected embedding shape from EF: {type(vec)}")
 
 # =====================================================================
-# CHROMA
+# CHROMA (single persistent DB for all campaigns)
 # =====================================================================
 from threading import RLock
 
-_chroma_clients: dict[str, chromadb.PersistentClient] = {}
-_collections: dict[str, Any] = {}
-_chroma_lock = RLock()
-
-def _db_key_for_campaign(campaign_id: str | None) -> str:
-    """Return a stable cache key for a campaign's DB path."""
-    return campaign_id.strip() if campaign_id else "__default__"
+# One on-disk DB path and one collection shared by all campaigns
+_client_lock = RLock()
+_client: chromadb.PersistentClient = None
+_collection: Any | None = None
 
 def _db_path_for_campaign(campaign_id: str | None) -> str:
-    """Resolve on-disk path for a campaign's Chroma DB."""
-    if not campaign_id:
-        return DB_PATH
-    safe = re.sub(r"[^a-zA-Z0-9._-]+", "_", campaign_id.strip())
-    return os.path.join(DB_PATH, safe)
+    """Single shared DB path (campaign_id ignored for storage)."""
+    return DB_PATH
+
+def _ensure_collection() -> Any:
+    global _client, _collection
+    with _client_lock:
+        if _collection is not None:
+            return _collection
+        os.makedirs(DB_PATH, exist_ok=True)
+        _client = chromadb.PersistentClient(
+            path=DB_PATH,
+            settings=Settings(anonymized_telemetry=False)
+        )
+        _collection = _client.get_or_create_collection(
+            name=COLLECTION_NAME,
+            embedding_function=ef
+        )
+        print(f"[Chroma] ready at {DB_PATH}, collection={COLLECTION_NAME} (single DB for all campaigns)")
+        return _collection
 
 def get_collection_for_campaign(campaign_id: str | None) -> Any:
     """
-    Get (or create) the Chroma collection for the given campaign.
-    Each campaign uses its own PersistentClient path for hard isolation.
+    Return the single shared collection. campaign_id is only used in metadata/filters.
     """
-    key = _db_key_for_campaign(campaign_id)
-    with _chroma_lock:
-        if key in _collections:
-            return _collections[key]
-
-        path = _db_path_for_campaign(campaign_id)
-        os.makedirs(path, exist_ok=True)
-        client = chromadb.PersistentClient(path=path, settings=Settings(anonymized_telemetry=False))
-        coll = client.get_or_create_collection(name=COLLECTION_NAME, embedding_function=ef)
-
-        _chroma_clients[key] = client
-        _collections[key] = coll
-        print(f"[Chroma] ready at {path}, collection={COLLECTION_NAME} (campaign={campaign_id or 'default'})")
-        return coll
+    return _ensure_collection()
 
 def ping_collection(campaign_id: str | None) -> None:
-    """Light health check; if it fails, rebuild only that campaign's client/collection."""
-    key = _db_key_for_campaign(campaign_id)
+    """Simple health check against the single shared collection."""
     try:
-        get_collection_for_campaign(campaign_id).count()
+        _ensure_collection().count()
     except Exception as e:
-        print(f"[Chroma] health failed for {key}: {e} — reinit")
-        with _chroma_lock:
-            _chroma_clients.pop(key, None)
-            _collections.pop(key, None)
-        _ = get_collection_for_campaign(campaign_id)  # re-create
+        print(f"[Chroma] health failed: {e} — reinit")
+        with _client_lock:
+            # Drop and recreate client/collection handle
+            global _client, _collection
+            _client = None
+            _collection = None
+        _ensure_collection()
 
-# Eager init for default collection only (so /health etc. still work)
-_ = get_collection_for_campaign(None)
+# Eager init
+_ = _ensure_collection()
 
 # =====================================================================
 # APP + LIFESPAN
@@ -575,19 +573,15 @@ class AnswerRequest(BaseModel):
 # =====================================================================
 @app.get("/health")
 def health(campaign_id: Optional[str] = None):
-    """
-    Health and diagnostics endpoint.
-    Pass ?campaign_id=... to inspect that DB; default otherwise.
-    """
     ping_collection(campaign_id)
     coll = get_collection_for_campaign(campaign_id)
     return {
         "ok": True,
         "models": {"whisper": WHISPER_MODEL, "embed": EMBED_MODEL, "gen": OLLAMA_SUMMARY_MODEL},
         "db": {
-            "path": _db_path_for_campaign(campaign_id),
+            "path": _db_path_for_campaign(None),   # always DB_PATH
             "collection": COLLECTION_NAME,
-            "campaign": campaign_id,
+            "campaign": campaign_id,               # echoed for client UI only
             "count": coll.count(),
         },
     }
@@ -607,20 +601,23 @@ def admin_clear_collection(campaign_id: Optional[str] = None):
 @app.post("/admin/reset_disk")
 def admin_reset_disk(campaign_id: Optional[str] = None):
     """
-    Delete the on-disk Chroma database for the selected campaign and recreate a fresh one.
-    If no campaign_id is provided, it resets the default DB.
+    Resets the single shared Chroma DB on disk (campaign_id ignored for storage).
     """
-    path = _db_path_for_campaign(campaign_id)
+    path = _db_path_for_campaign(None)
     try:
         if os.path.isdir(path):
             shutil.rmtree(path)
-        with _chroma_lock:
-            _chroma_clients.pop(_db_key_for_campaign(campaign_id), None)
-            _collections.pop(_db_key_for_campaign(campaign_id), None)
-        _ = get_collection_for_campaign(campaign_id)
+        # Drop handles and recreate
+        from threading import RLock
+        global _client, _collection
+        with _client_lock:
+            _client = None
+            _collection = None
+        _ = get_collection_for_campaign(None)
         return {"ok": True, "recreated": True, "path": path, "campaign_id": campaign_id}
     except Exception as e:
         raise HTTPException(500, f"reset_disk failed: {e}")
+
 
 # =====================================================================
 # RAG: INGEST / QUERY / ANSWER
@@ -877,6 +874,11 @@ async def _background_summary_task(send_queue: asyncio.Queue, seg: str):
                 continue
             cleaned_lines.append(s)
         out = "\n".join(cleaned_lines)
+        out = re.sub(
+            r"(?is)(^|\n)\s*(Follow[- ]?up\s+Question\s*\d*|Follow[- ]?up\s*|Discussion|Reflection|Prompt|Next\s+Question)[:\-\s].*",
+            "",
+            out,
+        ).strip()
 
         # Detect SKIP early to avoid emitting empty summaries
         first_line = ""
