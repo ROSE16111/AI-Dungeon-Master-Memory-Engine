@@ -2341,7 +2341,7 @@ export default function RecordPage() {
             className="absolute"
             style={{
               left: 0,
-              top: 106,
+              top: 100,
               width: 1024,
               height: "calc(100% - 106px - 24px)",
               backgroundImage: "url('/paper.png')",
