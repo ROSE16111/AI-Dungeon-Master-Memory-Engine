@@ -123,6 +123,8 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+Alternatively, can run `conda env create -f environment.yml` if using conda.
+
 **requirements.txt summary**
 
 ```

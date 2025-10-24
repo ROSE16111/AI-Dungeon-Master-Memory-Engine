@@ -1,6 +1,0 @@
-numpy
-sounddevice
-webrtcvad
-faster-whisper
-llama-cpp-python
-python-docx  # optional, only if you want DOCX export

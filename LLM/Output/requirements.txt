@@ -1,7 +1,0 @@
-# requirements for narrative_driver_unified.py
-# Install only what is needed for your selected backend/input type.
-# - If you only use --model mock with .txt/.md, you can skip these.
-# - For .docx input and Ollama backend, install both.
-
-requests>=2.31.0     # needed for Ollama HTTP API calls
-python-docx>=0.8.11  # needed to read .docx files
