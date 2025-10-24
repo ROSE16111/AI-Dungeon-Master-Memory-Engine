@@ -441,7 +441,7 @@ export default function LoginPage() {
             {/* Role */}
             <div className="space-y-2">
               <Label className="text-sm text-neutral-300">
-                <strong>Optional</strong>: Choose your Role who is already in
+                <strong>Optional</strong>: Choose your Character (if already captured)
               </Label>
               <div className="flex items-center gap-2">
                 <div className="flex-1">
@@ -449,7 +449,7 @@ export default function LoginPage() {
                     value={role}
                     onChange={setRole}
                     options={roles}
-                    placeholder="Enter your role name"
+                    placeholder="Character name"
                     disabled={!campaign}
                     allowEmpty
                     emptyLabel="(No role)"
