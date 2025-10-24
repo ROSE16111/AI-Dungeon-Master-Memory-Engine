@@ -207,6 +207,7 @@ step 3️. Open browser:
 
 You can now record speech, see incremental summaries, upload resources, and manage campaigns.
 
+See Test Materials folder so materials can that be used for testing.
 ---
 
 ## 6. Key Technologies
